@@ -1,0 +1,6 @@
+app/
+dockerfile/
+monitoring/
+orchestration
+code/
+utils/

@@ -1,0 +1,42 @@
+services:
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: 12345678
+    volumes:
+      - ./minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    privileged: true
+    security_opt:
+      - apparmor=unconfined
+      - seccomp=unconfined
+    restart: unless-stopped
+
+  cloudflared-api:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-api
+    depends_on:
+      - minio
+    command: tunnel --no-autoupdate --url http://minio:9000 --protocol http2
+    restart: unless-stopped
+    privileged: true
+    security_opt:
+      - apparmor=unconfined
+      - seccomp:unconfined
+
+  cloudflared-console:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared-console
+    depends_on:
+      - minio
+    command: tunnel --no-autoupdate --url http://minio:9001 --protocol http2
+    restart: unless-stopped
+    privileged: true
+    security_opt:
+      - apparmor=unconfined
+      - seccomp:unconfined
