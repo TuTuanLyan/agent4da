@@ -62,3 +62,13 @@ conda env export > agent4da.env.yml
 ```
 
 **Lưu ý:** Luôn luôn kiểm tra và commit file `agent4da.env.yml` sau khi cập nhật để đồng bộ hóa môi trường trên Git.
+
+## Shutdown
+```bash
+docker compose -f docker-compose.spark.yml -f docker-compose.minio.yml -f docker-compose.kafka.yml down
+```
+
+## View docker ps with norm format
+```bash
+docker ps --format "table {{.ID}}\t{{.Names}}\t{{.Status}}\t{{.Image}}"
+```

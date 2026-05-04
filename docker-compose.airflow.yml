@@ -1,0 +1,152 @@
+# =============================================================================
+# docker-compose.airflow.yml
+#
+# Stack: Airflow 2.10.4 + PostgreSQL 16 (shared instance)
+#
+# Giải quyết triệt để:
+#   - Password bị ghi đè   → entrypoint.sh reset password trước khi webserver start
+#   - "No host supplied"   → AIRFLOW__WEBSERVER__WORKER_LOG_SERVER_HOST="airflow"
+#   - Log permission       → named volume airflow_logs (uid=50000 owns natively)
+#   - Bundle jar duplicate → chỉ mount ./jars, loại bỏ bundle-2.29.52.jar plain
+#   - Task fail ngay       → log path dùng named volume, không bind mount host
+#
+# Postgres schema layout (dùng chung 1 instance):
+#   - airflow     → Airflow metadata (DAGs, task states, xcom, ...)
+#   - iceberg     → Iceberg REST catalog (sau này)
+#   - public      → App backend, general
+#   - bronze_meta → catalog metadata bronze layer (sau này)
+# =============================================================================
+
+services:
+  # ── Airflow ────────────────────────────────────────────────────────────────
+  airflow:
+    build:
+      context: .
+      dockerfile: dockerfile/Dockerfile.airflow
+
+    container_name: airflow
+    hostname: airflow          # quan trọng: webserver dùng hostname này để build log URL
+    restart: unless-stopped
+
+    ports:
+      - "8081:8080"            # Airflow UI → http://localhost:8081
+      - "8793:8793"            # Log server — webserver fetch task logs qua port này
+
+    environment:
+      # ── Core ─────────────────────────────────────────────────────────────
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/project/dags
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # socket.gethostname() trả về "airflow" (khớp với hostname: airflow ở trên)
+      # Airflow dùng giá trị này để build URL log: http://airflow:8793/log/...
+      AIRFLOW__CORE__HOSTNAME_CALLABLE: "socket.gethostname"
+
+      # ── Database — Postgres, schema airflow ──────────────────────────────
+      # airflow_user chỉ có quyền trên schema airflow — tạo bởi 01_init_schemas.sql
+      # search_path=airflow → mọi table Airflow nằm trong schema "airflow"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow_user:Airflow123!@postgres-db:5432/agent4da?options=-csearch_path%3Dairflow"
+
+      # ── Webserver ────────────────────────────────────────────────────────
+      AIRFLOW__WEBSERVER__SECRET_KEY: "agent4da-sprint0-secret"
+      AIRFLOW__WEBSERVER__BASE_URL: "http://localhost:8081"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      AIRFLOW__WEBSERVER__LOG_FETCH_TIMEOUT_SEC: "30"
+      # FIX "No host supplied": chỉ định tường minh hostname của log server
+      # Webserver sẽ fetch log tại: http://airflow:8793/log/dag_id=.../...
+      AIRFLOW__WEBSERVER__WORKER_LOG_SERVER_HOST: "airflow"
+
+      # ── Logging ──────────────────────────────────────────────────────────
+      # Dùng named volume — uid=50000 (airflow user) tự có quyền ghi ngay
+      # Không bind mount ./log/airflow → tránh hoàn toàn permission denied
+      AIRFLOW__LOGGING__BASE_LOG_FOLDER: /opt/airflow/logs
+      AIRFLOW__LOGGING__LOGGING_LEVEL: "INFO"
+      AIRFLOW__LOGGING__WORKER_LOG_SERVER_PORT: "8793"
+
+      # ── Scheduler ────────────────────────────────────────────────────────
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+      AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "false"
+
+      # ── Admin user — đọc bởi entrypoint.sh ──────────────────────────────
+      _AIRFLOW_WWW_USER_USERNAME: "admin"
+      _AIRFLOW_WWW_USER_PASSWORD: "Admin123!"
+      _AIRFLOW_WWW_USER_FIRSTNAME: "Admin"
+      _AIRFLOW_WWW_USER_LASTNAME: "Agent4DA"
+      _AIRFLOW_WWW_USER_EMAIL: "admin@agent4da.local"
+
+      # ── Connections ──────────────────────────────────────────────────────
+      # SparkSubmitOperator dùng conn_id="spark_default"
+      AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type":"spark","host":"spark://spark-master","port":7077}'
+      # Postgres connection cho PostgresOperator / future use
+      AIRFLOW_CONN_POSTGRES_DEFAULT: "postgresql+psycopg2://bigdata:%233Bigdata@postgres-db:5432/agent4da"
+
+    env_file:
+      - ./envs/airflow.env    # KAFKA_BOOTSTRAP, MINIO_ENDPOINT, MINIO_ACCESS_KEY, ...
+
+    volumes:
+      - ./code/airflow/dags:/opt/project/dags     # DAG files
+      - ./code:/opt/project/code                  # spark/bronze_job.py, etc.
+      - ./data:/opt/project/data                  # CSV data
+      - ./jars:/opt/project/jars:ro               # jars cho spark-submit
+      # Named volume cho logs — không phụ thuộc UID host
+      - airflow_logs:/opt/airflow/logs
+      - airflow_home:/opt/airflow
+
+    networks:
+      - data_network
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  # Shared instance — nhiều schema cho nhiều mục đích khác nhau
+  # Xem init/01_init_schemas.sql để biết schema layout
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-db
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: bigdata
+      POSTGRES_PASSWORD: '#3Bigdata'
+      POSTGRES_DB: agent4da
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Init script chỉ chạy 1 lần khi volume lần đầu được tạo
+      - ./init:/docker-entrypoint-initdb.d:ro
+
+    networks:
+      - data_network
+
+    ports:
+      - "5432:5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bigdata -d agent4da"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    security_opt:
+      - apparmor=unconfined
+
+# ── Networks & Volumes ────────────────────────────────────────────────────────
+networks:
+  data_network:
+    external: true
+    name: data_network
+
+volumes:
+  airflow_home:
+  airflow_logs:     # named volume — airflow user (uid=50000) tự có quyền ghi
+  postgres_data:
+    driver: local

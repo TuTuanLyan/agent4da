@@ -5,6 +5,11 @@ model/
 models/
 __pycache__/
 
+jars/
+data/.spark_ivy/
+data/.spark_ivy_airflow/
+notebook/.ipynb_checkpoints/
+
 *.pyc
 *.pkl
 *.h5
@@ -15,6 +20,7 @@ __pycache__/
 .vscode/
 .idea/
 
+envs/
 *.env
 .env.*
 .env
