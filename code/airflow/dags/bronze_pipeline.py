@@ -86,26 +86,24 @@ def bronze_pipeline():
         driver_class_path=CLASSPATH,
 
         conf={
-            # JVM classpath cho executor processes (colon-separated)
             "spark.executor.extraClassPath": CLASSPATH,
 
-            # Suppress SLF4J duplicate binding từ AWS bundle
+            "spark.pyspark.python": "/usr/bin/python3",
+            "spark.pyspark.driver.python": "/usr/bin/python3",
+            "spark.executorEnv.PYSPARK_PYTHON": "/usr/bin/python3",
+
             "spark.driver.extraJavaOptions":
                 "-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN",
             "spark.executor.extraJavaOptions":
                 "-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN",
 
-            # Truyền env vars xuống executor — bronze_job.py đọc os.getenv()
-            # Driver đọc trực tiếp từ container env (airflow.env)
-            # Executor (spark-worker) cần được truyền tường minh
-            "spark.executorEnv.KAFKA_BOOTSTRAP":     "kafka-kraft:29092",
-            "spark.executorEnv.KAFKA_TOPIC":         "ecommerce_events",
-            "spark.executorEnv.MINIO_ENDPOINT":      "http://minio:9000",
-            "spark.executorEnv.MINIO_ACCESS_KEY":    "admin",
-            "spark.executorEnv.MINIO_SECRET_KEY":    "Admin123!",
+            "spark.executorEnv.KAFKA_BOOTSTRAP": "kafka-kraft:29092",
+            "spark.executorEnv.KAFKA_TOPIC": "ecommerce_events",
+            "spark.executorEnv.MINIO_ENDPOINT": "http://minio:9000",
+            "spark.executorEnv.MINIO_ACCESS_KEY": "admin",
+            "spark.executorEnv.MINIO_SECRET_KEY": "Admin123!",
             "spark.executorEnv.MINIO_BUCKET_BRONZE": "bronze",
 
-            # Giới hạn shuffle — cluster nhỏ không cần 200
             "spark.sql.shuffle.partitions": "4",
         },
 
