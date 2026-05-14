@@ -39,7 +39,7 @@ ECOMMERCE_SCHEMA = StructType([
 ])
 
 # ---------------------------------------------------------------------------
-# Tạo SparkSession — jars được truyền qua spark-submit --jars, không hardcode
+# Tạo SparkSession — jars được mount sẵn và truyền qua local classpath
 # ---------------------------------------------------------------------------
 def create_spark_session():
     return (

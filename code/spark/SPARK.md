@@ -1,14 +1,58 @@
-## submit job
+# Spark Jobs
+
+Project dùng Spark để xử lý Medallion Architecture.
+
+Hiện có 2 job:
+
+- `bronze_job.py`: đọc Kafka topic `ecommerce_events`, ghi Parquet vào `s3a://bronze/ecommerce_events/`.
+- `silver_job.py`: đọc Bronze Parquet, chuẩn hóa dữ liệu, ghi valid vào `s3a://silver/ecommerce_events/` và invalid vào `s3a://silver/ecommerce_events_invalid/`.
+
+## JARs
+
+Không dùng `--packages`.
+
+Các JAR local được mount tại:
+
 ```bash
-docker exec -it spark-master /opt/spark/bin/spark-submit \
-  --master spark://spark-master:7077 \
-  --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1,org.apache.hadoop:hadoop-aws:3.4.2 \
-  /opt/spark/work/bronze_job.py
+/opt/project/jars
 ```
-or
+
+DAG và script submit truyền JAR qua:
+
 ```bash
-docker exec airflow /opt/spark/bin/spark-submit \
-  --master spark://spark-master:7077 \
-  --packages org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1,org.apache.hadoop:hadoop-aws:3.4.2 \
-  /opt/project/code/spark/bronze_stream_job.py
+--driver-class-path
+spark.executor.extraClassPath
+```
+
+Cách này tránh Ivy resolver và tránh tải dependency lại mỗi lần submit.
+
+## Chạy thủ công
+
+Chạy Bronze:
+
+```bash
+./script/spark/submit_bronze.sh
+```
+
+Chạy Silver:
+
+```bash
+./script/spark/submit_silver.sh
+```
+
+Test Silver bằng overwrite:
+
+```bash
+SILVER_WRITE_MODE=overwrite ./script/spark/submit_silver.sh
+```
+
+## Log
+
+Airflow UI là nơi đọc log chính khi chạy bằng DAG.
+
+Spark worker vẫn lưu executor log tại:
+
+```bash
+log/spark/app-*/0/stdout
+log/spark/app-*/0/stderr
 ```

@@ -1,24 +1,17 @@
 """
-DAG: bronze_pipeline
-Spark Batch: Kafka → MinIO bronze (Parquet), offset-based incremental load.
-
-Schedule: chạy mỗi 10 phút.
+DAG: silver_pipeline
+Spark Batch: MinIO bronze Parquet -> MinIO silver clean Parquet.
 """
 
 from datetime import datetime, timedelta
+
 from airflow.decorators import dag
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 
-# ---------------------------------------------------------------------------
-# Jars — mount tại /opt/project/jars/ trong cả airflow và spark containers
-#
-# Dùng classpath local thay vì --jars.
-# Vì /opt/project/jars được mount sẵn vào Airflow, spark-master và spark-worker,
-# ta không cần Spark copy jar vào log/spark/app-* cho từng application.
-#
-# Bỏ bundle-2.29.52.jar plain (trùng với software.amazon.awssdk_bundle-2.29.52.jar)
-# → tránh SLF4J duplicate binding + ClassLoader conflict
-# ---------------------------------------------------------------------------
+
+# Jars are mounted at /opt/project/jars in Airflow and Spark containers.
+# Use local classpath only; do not pass --jars, otherwise Spark copies these
+# jars into log/spark/app-* for every application run.
 _J = "/opt/project/jars"
 
 _JARS = [
@@ -26,9 +19,9 @@ _JARS = [
     f"{_J}/org.apache.hadoop_hadoop-aws-3.4.2.jar",
     f"{_J}/org.apache.hadoop_hadoop-client-api-3.4.2.jar",
     f"{_J}/org.apache.hadoop_hadoop-client-runtime-3.4.2.jar",
-    # AWS SDK — chỉ dùng bản có prefix tên đầy đủ, bỏ bundle-2.29.52.jar plain
+    # AWS SDK
     f"{_J}/software.amazon.awssdk_bundle-2.29.52.jar",
-    # Kafka connector
+    # Kafka connector jars are kept here to match bronze_pipeline classpath.
     f"{_J}/org.apache.spark_spark-sql-kafka-0-10_2.13-4.1.1.jar",
     f"{_J}/org.apache.spark_spark-token-provider-kafka-0-10_2.13-4.1.1.jar",
     f"{_J}/org.apache.kafka_kafka-clients-3.9.1.jar",
@@ -40,10 +33,9 @@ _JARS = [
     f"{_J}/org.scala-lang.modules_scala-parallel-collections_2.13-1.2.0.jar",
 ]
 
-# classpath: colon-separated (Linux JVM convention)
 CLASSPATH = ":".join(_JARS)
 
-# ---------------------------------------------------------------------------
+
 default_args = {
     "owner": "agent4da",
     "retries": 1,
@@ -55,63 +47,43 @@ default_args = {
 
 
 @dag(
-    dag_id="bronze_pipeline",
-    description="Spark batch: Kafka → MinIO bronze (Parquet)",
+    dag_id="silver_pipeline",
+    description="Spark batch: MinIO bronze Parquet -> MinIO silver clean Parquet",
     default_args=default_args,
     start_date=datetime(2026, 5, 1),
-    schedule="*/10 * * * *",  # cron string — tránh deprecation warning của timedelta
+    schedule="*/10 * * * *",
     catchup=False,
-    max_active_runs=1,        # tránh race condition trên offset file trong MinIO
-    tags=["bronze", "kafka", "spark"],
+    max_active_runs=1,
+    tags=["silver", "minio", "spark"],
 )
-def bronze_pipeline():
-
+def silver_pipeline():
     SparkSubmitOperator(
-        task_id="spark_bronze_job",
-
-        # Connection — định nghĩa qua AIRFLOW_CONN_SPARK_DEFAULT trong compose
+        task_id="spark_silver_job",
         conn_id="spark_default",
-
-        # Script — path trong container airflow (volume ./code → /opt/project/code)
-        application="/opt/project/code/spark/bronze_job.py",
-
-        # Không dùng --jars: tránh Spark copy jar vào log/spark/app-* mỗi lần chạy.
+        application="/opt/project/code/spark/silver_job.py",
         jars=None,
-
-        # --driver-class-path: JVM classpath cho driver process (colon-separated)
         driver_class_path=CLASSPATH,
-
         conf={
             "spark.executor.extraClassPath": CLASSPATH,
-
             "spark.pyspark.python": "/usr/bin/python3",
             "spark.pyspark.driver.python": "/usr/bin/python3",
             "spark.executorEnv.PYSPARK_PYTHON": "/usr/bin/python3",
-
             "spark.driver.extraJavaOptions":
                 "-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN",
             "spark.executor.extraJavaOptions":
                 "-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN",
-
-            "spark.executorEnv.KAFKA_BOOTSTRAP": "kafka-kraft:29092",
-            "spark.executorEnv.KAFKA_TOPIC": "ecommerce_events",
             "spark.executorEnv.MINIO_ENDPOINT": "http://minio:9000",
             "spark.executorEnv.MINIO_ACCESS_KEY": "admin",
             "spark.executorEnv.MINIO_SECRET_KEY": "Admin123!",
             "spark.executorEnv.MINIO_BUCKET_BRONZE": "bronze",
-
+            "spark.executorEnv.MINIO_BUCKET_SILVER": "silver",
             "spark.sql.shuffle.partitions": "4",
         },
-
-        # Không dùng packages — tránh Ivy resolver chạy mỗi lần submit
         packages=None,
-
-        name="BronzeBatchJob",
+        name="SilverEcommerceEventsJob",
         verbose=True,
-
-        # Task timeout — không để treo indefinitely
         execution_timeout=timedelta(minutes=15),
     )
 
 
-bronze_pipeline()
+silver_pipeline()

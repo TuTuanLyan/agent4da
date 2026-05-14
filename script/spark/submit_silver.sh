@@ -1,21 +1,19 @@
 #!/bin/bash
 # =============================================================================
-# submit_bronze.sh — submit BronzeBatchJob thủ công (bypass Airflow)
+# submit_silver.sh - submit SilverEcommerceEventsJob manually.
 #
-# Dùng để test/debug trực tiếp mà không cần trigger DAG.
-# Jars mount tại /opt/project/jars/ trong spark-master và spark-worker.
-#
-# FIX: --driver-class-path dùng ":" (Linux path separator).
-#      Không dùng --jars vì jars đã được mount sẵn ở /opt/project/jars.
+# Use this to test/debug directly without triggering Airflow.
+# Jars are mounted at /opt/project/jars/ in Spark containers.
 # =============================================================================
 
 set -e
 
 JARS_DIR="/opt/project/jars"
 
-# Classpath cho driver và executor (separator = ":" — Linux convention).
-# Không dùng --jars vì /opt/project/jars đã được mount sẵn vào Spark containers.
-# Nếu dùng --jars, Spark sẽ copy jar vào log/spark/app-* cho mỗi lần chạy.
+# Driver/executor classpath uses colon-separated paths.
+# Do not use --jars because /opt/project/jars is already mounted into Spark
+# containers. Passing --jars makes Spark copy jars into log/spark/app-* on
+# every run.
 CLASSPATH="${JARS_DIR}/org.apache.hadoop_hadoop-aws-3.4.2.jar:\
 ${JARS_DIR}/org.apache.hadoop_hadoop-client-api-3.4.2.jar:\
 ${JARS_DIR}/org.apache.hadoop_hadoop-client-runtime-3.4.2.jar:\
@@ -29,22 +27,29 @@ ${JARS_DIR}/org.xerial.snappy_snappy-java-1.1.10.8.jar:\
 ${JARS_DIR}/org.slf4j_slf4j-api-2.0.17.jar:\
 ${JARS_DIR}/org.scala-lang.modules_scala-parallel-collections_2.13-1.2.0.jar"
 
-echo "==> Submitting BronzeBatchJob ..."
+echo "==> Submitting SilverEcommerceEventsJob ..."
 
-docker exec spark-master \
+docker exec \
+  -e MINIO_ENDPOINT=http://minio:9000 \
+  -e MINIO_ACCESS_KEY=admin \
+  -e MINIO_SECRET_KEY=Admin123! \
+  -e MINIO_BUCKET_BRONZE=bronze \
+  -e MINIO_BUCKET_SILVER=silver \
+  -e SILVER_WRITE_MODE="${SILVER_WRITE_MODE:-append}" \
+  spark-master \
   /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
   --driver-class-path "${CLASSPATH}" \
   --conf "spark.executor.extraClassPath=${CLASSPATH}" \
-  --conf "spark.executorEnv.KAFKA_BOOTSTRAP=kafka-kraft:29092" \
-  --conf "spark.executorEnv.KAFKA_TOPIC=ecommerce_events" \
   --conf "spark.executorEnv.MINIO_ENDPOINT=http://minio:9000" \
   --conf "spark.executorEnv.MINIO_ACCESS_KEY=admin" \
   --conf "spark.executorEnv.MINIO_SECRET_KEY=Admin123!" \
   --conf "spark.executorEnv.MINIO_BUCKET_BRONZE=bronze" \
+  --conf "spark.executorEnv.MINIO_BUCKET_SILVER=silver" \
+  --conf "spark.executorEnv.SILVER_WRITE_MODE=${SILVER_WRITE_MODE:-append}" \
   --conf "spark.sql.shuffle.partitions=4" \
   --conf "spark.driver.extraJavaOptions=-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN" \
   --conf "spark.executor.extraJavaOptions=-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN" \
-  /opt/spark/work/bronze_job.py
+  /opt/spark/work/silver_job.py
 
 echo "==> Done."
