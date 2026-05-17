@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+groq
+trino
+psycopg2-binary
+python-dotenv
+pydantic

@@ -1,0 +1,65 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-bigdata}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-#3Bigdata}"
+      POSTGRES_DB: "${POSTGRES_DB:-agent4da}"
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - data_network
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-bigdata} -d $${POSTGRES_DB:-agent4da}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - apparmor=unconfined
+
+  trino:
+    image: trinodb/trino:latest
+    container_name: trino
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./trino/etc:/etc/trino
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - data_network
+
+  api:
+    build:
+      context: ./code/api
+    container_name: agent4da-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      trino:
+        condition: service_started
+    networks:
+      - data_network
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  data_network:
+    external: true
+    name: data_network
