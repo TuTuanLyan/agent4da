@@ -4,7 +4,7 @@
 --
 -- Schema layout — dùng chung 1 Postgres instance:
 --   airflow     → Airflow metadata (DAG runs, task instances, XCom, ...)
---   iceberg     → Iceberg REST catalog (dùng sau)
+--   iceberg     → Iceberg JDBC Catalog metadata
 --   bronze_meta → Optional: catalog/stats cho bronze layer
 --   silver_meta → Optional: catalog/stats cho silver layer
 --   public      → App backend, general queries (mặc định)
@@ -45,7 +45,11 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA airflow
 
 -- bigdata: full quyền mọi schema
 GRANT ALL ON SCHEMA airflow, iceberg, bronze_meta, silver_meta, public TO bigdata;
+GRANT USAGE, CREATE ON SCHEMA iceberg TO bigdata;
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA iceberg TO bigdata;
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA iceberg TO bigdata;
 ALTER DEFAULT PRIVILEGES IN SCHEMA airflow     GRANT ALL ON TABLES TO bigdata;
 ALTER DEFAULT PRIVILEGES IN SCHEMA iceberg     GRANT ALL ON TABLES TO bigdata;
+ALTER DEFAULT PRIVILEGES IN SCHEMA iceberg     GRANT ALL ON SEQUENCES TO bigdata;
 ALTER DEFAULT PRIVILEGES IN SCHEMA bronze_meta GRANT ALL ON TABLES TO bigdata;
 ALTER DEFAULT PRIVILEGES IN SCHEMA silver_meta GRANT ALL ON TABLES TO bigdata;
