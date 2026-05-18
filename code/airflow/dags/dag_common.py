@@ -1,4 +1,4 @@
-"""Shared Airflow DAG settings for Spark submit jobs."""
+"""Small shared settings for Bronze and Silver Spark DAGs."""
 
 import os
 
@@ -20,12 +20,6 @@ BASE_JARS = [
     f"{JARS_DIR}/org.scala-lang.modules_scala-parallel-collections_2.13-1.2.0.jar",
 ]
 
-ICEBERG_JARS = [
-    f"{JARS_DIR}/iceberg-spark-runtime-4.0_2.13-1.10.1.jar",
-    f"{JARS_DIR}/postgresql-42.7.4.jar",
-]
-
-
 def env(name, default):
     return os.getenv(name, default)
 
@@ -41,11 +35,8 @@ def require_env(name):
     return value
 
 
-def build_classpath(include_iceberg=False):
-    jars = list(BASE_JARS)
-    if include_iceberg:
-        jars.extend(ICEBERG_JARS)
-    return ":".join(jars)
+def build_classpath():
+    return ":".join(BASE_JARS)
 
 
 def base_spark_conf(classpath):
@@ -66,52 +57,4 @@ def minio_executor_conf():
         "spark.executorEnv.MINIO_ENDPOINT": env("MINIO_ENDPOINT", "http://minio:9000"),
         "spark.executorEnv.MINIO_ACCESS_KEY": require_env("MINIO_ACCESS_KEY"),
         "spark.executorEnv.MINIO_SECRET_KEY": require_env("MINIO_SECRET_KEY"),
-    }
-
-
-def minio_spark_conf():
-    return {
-        "spark.hadoop.fs.s3a.endpoint": env("MINIO_ENDPOINT", "http://minio:9000"),
-        "spark.hadoop.fs.s3a.access.key": require_env("MINIO_ACCESS_KEY"),
-        "spark.hadoop.fs.s3a.secret.key": require_env("MINIO_SECRET_KEY"),
-        "spark.hadoop.fs.s3a.path.style.access": "true",
-        "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
-        "spark.hadoop.fs.s3a.aws.credentials.provider": (
-            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider"
-        ),
-        "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
-    }
-
-
-def iceberg_spark_conf():
-    catalog = env("ICEBERG_CATALOG_NAME", "iceberg_catalog")
-    return {
-        "spark.sql.extensions": "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions",
-        f"spark.sql.catalog.{catalog}": "org.apache.iceberg.spark.SparkCatalog",
-        f"spark.sql.catalog.{catalog}.catalog-impl": "org.apache.iceberg.jdbc.JdbcCatalog",
-        f"spark.sql.catalog.{catalog}.uri": env(
-            "ICEBERG_JDBC_URI",
-            "jdbc:postgresql://postgres-db:5432/agent4da",
-        ),
-        f"spark.sql.catalog.{catalog}.jdbc.user": require_env("ICEBERG_JDBC_USER"),
-        f"spark.sql.catalog.{catalog}.jdbc.password": require_env("ICEBERG_JDBC_PASSWORD"),
-        f"spark.sql.catalog.{catalog}.jdbc.currentSchema": env("ICEBERG_JDBC_SCHEMA", "iceberg"),
-        f"spark.sql.catalog.{catalog}.warehouse": env("ICEBERG_WAREHOUSE", "s3a://gold/warehouse/"),
-        f"spark.sql.catalog.{catalog}.io-impl": "org.apache.iceberg.hadoop.HadoopFileIO",
-    }
-
-
-def iceberg_executor_conf():
-    return {
-        "spark.executorEnv.ICEBERG_CATALOG_NAME": env("ICEBERG_CATALOG_NAME", "iceberg_catalog"),
-        "spark.executorEnv.GOLD_NAMESPACE": env("GOLD_NAMESPACE", "gold"),
-        "spark.executorEnv.METADATA_NAMESPACE": env("METADATA_NAMESPACE", "metadata"),
-        "spark.executorEnv.ICEBERG_WAREHOUSE": env("ICEBERG_WAREHOUSE", "s3a://gold/warehouse/"),
-        "spark.executorEnv.ICEBERG_JDBC_URI": env(
-            "ICEBERG_JDBC_URI",
-            "jdbc:postgresql://postgres-db:5432/agent4da",
-        ),
-        "spark.executorEnv.ICEBERG_JDBC_USER": require_env("ICEBERG_JDBC_USER"),
-        "spark.executorEnv.ICEBERG_JDBC_PASSWORD": require_env("ICEBERG_JDBC_PASSWORD"),
-        "spark.executorEnv.ICEBERG_JDBC_SCHEMA": env("ICEBERG_JDBC_SCHEMA", "iceberg"),
     }

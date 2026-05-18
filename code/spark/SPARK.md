@@ -1,40 +1,55 @@
 # Spark Jobs
 
-Project dùng Spark cho Medallion Architecture.
+Spark layer hiện được giữ đơn giản trước: Bronze và Silver là hai job đang chạy
+chính. Gold hiện tại đã được đưa vào `_archive/` để sau này build lại sạch hơn.
 
-## Main Jobs
+## Current Entrypoints
 
 - `bronze_job.py`: đọc Kafka topic `ecommerce_events`, ghi Parquet vào `s3a://bronze/ecommerce_events/`.
 - `silver_job.py`: đọc Bronze Parquet, chuẩn hóa dữ liệu, ghi valid/invalid Silver Parquet.
-- `gold_job.py`: tạo Iceberg schema, build Gold analytics tables và semantic metadata.
 
-## Shared Modules
+## Current Structure
 
-- `common/`: config, SparkSession, S3A, Iceberg, logging, data quality helpers.
-- `gold/`: schemas, DDL, readers, builders, writers, validators cho Gold.
-- `_archive/`: Gold stage jobs cũ, không còn là entrypoint chính.
-- `tools/iceberg_smoke_test.py`: smoke test Spark + Iceberg JDBC Catalog + MinIO.
+```text
+code/spark/
+├── bronze_job.py
+├── silver_job.py
+├── common/
+│   ├── __init__.py
+│   ├── config.py
+│   └── s3a.py
+└── _archive/
+```
+
+## Design Rule
+
+- Bronze config chỉ nằm trong `load_bronze_config()`.
+- Silver config chỉ nằm trong `load_silver_config()`.
+- Mỗi job tự tạo SparkSession trong chính file job.
+- `common/` chỉ chứa helper nhỏ, không chứa factory SparkSession có nhánh Gold/Iceberg.
+- Không dùng `spark.jars.packages`; DAG/script dùng JAR local đã mount.
+- Gold/Iceberg config sẽ được thêm lại sau trong module riêng, không trộn vào Bronze/Silver.
 
 ## Manual Run
 
 ```bash
 ./script/spark/submit_bronze.sh
 ./script/spark/submit_silver.sh
-./script/spark/submit_gold.sh
 ```
 
-Gold run mode examples:
+Active submit scripts chỉ load `envs/minio.env`, `envs/spark.env`, và
+`envs/airflow.env`. Gold/Iceberg scripts, kể cả script tải Iceberg JAR, đã được
+đưa vào `script/spark/_archive/`.
 
-```bash
-GOLD_RUN_MODE=schema_only ./script/spark/submit_gold.sh
-GOLD_RUN_MODE=all GOLD_REFRESH_MODE=full_refresh ./script/spark/submit_gold.sh
-GOLD_RUN_MODE=validate_only ./script/spark/submit_gold.sh
-```
+## Airflow DAGs
 
-Iceberg smoke test:
+- `code/airflow/dags/bronze_pipeline.py`
+- `code/airflow/dags/silver_pipeline.py`
 
-```bash
-./script/spark/submit_iceberg_smoke_test.sh
+Gold DAG hiện nằm trong:
+
+```text
+code/airflow/dags/_disabled/gold_pipeline.py.disabled
 ```
 
 ## JARs

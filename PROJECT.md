@@ -8,11 +8,9 @@ Pipeline chính đi theo Medallion Architecture: Bronze, Silver, Gold.
 - `app/`: backend/frontend application.
 - `code/kafka/`: Kafka producer và tài liệu Kafka.
 - `code/spark/`: Spark ETL entrypoints.
-- `code/spark/common/`: helper chung cho config, Spark, S3A, Iceberg, logging, data quality.
-- `code/spark/gold/`: module build Gold Iceberg tables và metadata catalog.
-- `code/spark/_archive/`: Gold stage jobs cũ, giữ để tham khảo.
-- `code/spark/tools/`: Spark utility jobs như Iceberg smoke test.
-- `code/airflow/dags/`: Airflow DAGs cho Bronze, Silver, Gold.
+- `code/spark/common/`: helper nhỏ cho env config và S3A.
+- `code/spark/_archive/`: Gold jobs hiện tại và stage jobs cũ, giữ để build lại sau.
+- `code/airflow/dags/`: Airflow DAGs cho Bronze và Silver.
 - `data/`: raw/sample data local.
 - `envs/`: environment variables và local dev secrets.
 - `jars/`: local Spark/Iceberg/Hadoop jars.
@@ -38,18 +36,15 @@ Silver:
 - Ghi clean Parquet vào MinIO Silver.
 
 Gold:
-- Đọc Silver valid events.
-- Ghi Iceberg fact, dimension, summary tables.
-- Ghi metadata catalog phục vụ AI Agent.
+- Tạm archive để build lại sau.
+- Không còn trộn config Gold/Iceberg vào Bronze/Silver.
 
 ## Main Entrypoints
 
 - `code/spark/bronze_job.py`
 - `code/spark/silver_job.py`
-- `code/spark/gold_job.py`
 - `code/airflow/dags/bronze_pipeline.py`
 - `code/airflow/dags/silver_pipeline.py`
-- `code/airflow/dags/gold_pipeline.py`
 
 ## Secret Management
 

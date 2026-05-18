@@ -12,6 +12,7 @@ SILVER_WRITE_MODE=overwrite only for local/test resets.
 """
 
 from pyspark.errors import AnalysisException
+from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
     concat_ws,
@@ -32,8 +33,8 @@ from pyspark.sql.functions import (
 )
 from pyspark.sql.window import Window
 
-from common.config import load_config
-from common.spark_session import create_spark_session as build_spark_session
+from common.config import load_silver_config
+from common.s3a import apply_s3a_options
 
 
 JOB_NAME = "SilverEcommerceEventsJob"
@@ -42,18 +43,6 @@ JOB_NAME = "SilverEcommerceEventsJob"
 def log(message):
     print(f"[Silver] {message}", flush=True)
 
-
-# ---------------------------------------------------------------------------
-# Environment config with safe defaults for the Docker stack
-# ---------------------------------------------------------------------------
-CONFIG = load_config(validate_gold=False)
-BRONZE_BUCKET = CONFIG.minio.bronze_bucket
-SILVER_BUCKET = CONFIG.minio.silver_bucket
-SILVER_WRITE_MODE = CONFIG.silver_write_mode
-
-INPUT_PATH = f"s3a://{BRONZE_BUCKET}/ecommerce_events/"
-VALID_OUTPUT_PATH = f"s3a://{SILVER_BUCKET}/ecommerce_events/"
-INVALID_OUTPUT_PATH = f"s3a://{SILVER_BUCKET}/ecommerce_events_invalid/"
 
 VALID_EVENT_TYPES = ["view", "cart", "remove_from_cart", "purchase"]
 
@@ -86,11 +75,14 @@ SILVER_COLUMNS = [
 ]
 
 
-def create_spark_session():
-    return build_spark_session(
-        JOB_NAME,
-        pipeline_config=CONFIG,
-        session_timezone="UTC",
+def create_spark_session(config):
+    builder = SparkSession.builder.appName(JOB_NAME)
+    builder = apply_s3a_options(builder, config.minio)
+    return (
+        builder
+        .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.sql.shuffle.partitions", config.shuffle_partitions)
+        .getOrCreate()
     )
 
 
@@ -102,15 +94,15 @@ def path_exists(spark, path):
     return fs.exists(jvm.org.apache.hadoop.fs.Path(path))
 
 
-def read_bronze_dataframe(spark):
-    if not path_exists(spark, INPUT_PATH):
-        log(f"No Bronze data found at {INPUT_PATH}. Exiting safely.")
+def read_bronze_dataframe(spark, config):
+    if not path_exists(spark, config.input_path):
+        log(f"No Bronze data found at {config.input_path}. Exiting safely.")
         return None
 
     try:
-        return spark.read.parquet(INPUT_PATH)
+        return spark.read.parquet(config.input_path)
     except AnalysisException as exc:
-        log(f"No readable Bronze parquet at {INPUT_PATH}.")
+        log(f"No readable Bronze parquet at {config.input_path}.")
         log(f"Spark message: {exc}")
         return None
 
@@ -271,9 +263,9 @@ def normalize_write_mode(mode):
     return "append"
 
 
-def write_outputs(silver_df):
+def write_outputs(silver_df, config):
     spark = silver_df.sparkSession
-    write_mode = normalize_write_mode(SILVER_WRITE_MODE)
+    write_mode = normalize_write_mode(config.write_mode)
     valid_df = silver_df.where(col("is_valid"))
     invalid_df = silver_df.where(~col("is_valid"))
     valid_dedup_df = deduplicate_valid_events(valid_df).cache()
@@ -291,7 +283,7 @@ def write_outputs(silver_df):
     existing_valid_ids = None
 
     if write_mode == "append":
-        existing_valid_ids = read_existing_source_event_ids(spark, VALID_OUTPUT_PATH)
+        existing_valid_ids = read_existing_source_event_ids(spark, config.valid_output_path)
         if existing_valid_ids is not None:
             existing_valid_ids.cache()
             existing_valid_ids.count()
@@ -318,14 +310,14 @@ def write_outputs(silver_df):
         valid_output_df.write
         .mode(write_mode)
         .partitionBy("event_date")
-        .parquet(VALID_OUTPUT_PATH)
+        .parquet(config.valid_output_path)
     )
 
     (
         invalid_output_df.write
         .mode(write_mode)
         .partitionBy("processing_date")
-        .parquet(INVALID_OUTPUT_PATH)
+        .parquet(config.invalid_output_path)
     )
 
     if existing_valid_ids is not None:
@@ -336,23 +328,25 @@ def write_outputs(silver_df):
 
 
 def main():
+    config = load_silver_config()
+
     print("=" * 70)
     print("  Spark Silver E-commerce Events Job")
-    print(f"  Input         : {INPUT_PATH}")
-    print(f"  Output valid  : {VALID_OUTPUT_PATH}")
-    print(f"  Output invalid: {INVALID_OUTPUT_PATH}")
+    print(f"  Input         : {config.input_path}")
+    print(f"  Output valid  : {config.valid_output_path}")
+    print(f"  Output invalid: {config.invalid_output_path}")
     print("=" * 70)
 
-    spark = create_spark_session()
+    spark = create_spark_session(config)
     spark.sparkContext.setLogLevel("WARN")
 
     try:
-        bronze_df = read_bronze_dataframe(spark)
+        bronze_df = read_bronze_dataframe(spark, config)
         if bronze_df is None:
             return
 
         if bronze_df.limit(1).count() == 0:
-            log(f"Bronze path is empty at {INPUT_PATH}. Exiting safely.")
+            log(f"Bronze path is empty at {config.input_path}. Exiting safely.")
             return
 
         bronze_df.cache()
@@ -360,7 +354,7 @@ def main():
         log(f"Total Bronze rows read: {total_rows}")
 
         silver_df = build_silver_dataframe(bronze_df).cache()
-        write_outputs(silver_df)
+        write_outputs(silver_df, config)
 
         silver_df.unpersist()
         bronze_df.unpersist()

@@ -24,7 +24,6 @@ require_env() {
 }
 
 load_env_file "${PROJECT_ROOT}/envs/minio.env"
-load_env_file "${PROJECT_ROOT}/envs/iceberg.env"
 load_env_file "${PROJECT_ROOT}/envs/spark.env"
 load_env_file "${PROJECT_ROOT}/envs/airflow.env"
 
@@ -33,4 +32,3 @@ MINIO_BUCKET_BRONZE="${MINIO_BUCKET_BRONZE:-bronze}"
 MINIO_BUCKET_SILVER="${MINIO_BUCKET_SILVER:-silver}"
 SPARK_SHUFFLE_PARTITIONS="${SPARK_SHUFFLE_PARTITIONS:-4}"
 SPARK_MASTER_URL="${SPARK_MASTER_URL:-spark://spark-master:7077}"
-
