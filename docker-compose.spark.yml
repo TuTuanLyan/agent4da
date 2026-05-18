@@ -16,6 +16,8 @@ services:
     environment:
       IVY_HOME: /root/.ivy2
       SPARK_NO_DAEMONIZE: "true"
+    env_file:
+      - ./envs/spark.env
     volumes:
       - ./code/spark:/opt/spark/work:ro
       # Jars mount tại path riêng — không đè /opt/spark/jars gốc của image
@@ -39,6 +41,8 @@ services:
       IVY_HOME: /root/.ivy2
       SPARK_NO_DAEMONIZE: "true"
       SPARK_WORKER_DIR: /opt/spark/worker-logs
+    env_file:
+      - ./envs/spark.env
     volumes:
       - ./code/spark:/opt/spark/work:ro
       # Worker cũng cần đúng path này để executor load được jars

@@ -41,11 +41,13 @@ log "DB ready."
 #    Dùng Python API trực tiếp — không phụ thuộc vào standalone behavior
 # ---------------------------------------------------------------------------
 log "Ensuring admin user..."
+: "${_AIRFLOW_WWW_USER_USERNAME:?Missing _AIRFLOW_WWW_USER_USERNAME}"
+: "${_AIRFLOW_WWW_USER_PASSWORD:?Missing _AIRFLOW_WWW_USER_PASSWORD}"
 python3 - << 'PYEOF'
 import os
 
-username = os.getenv("_AIRFLOW_WWW_USER_USERNAME", "admin")
-password = os.getenv("_AIRFLOW_WWW_USER_PASSWORD", "Admin123!")
+username = os.environ["_AIRFLOW_WWW_USER_USERNAME"]
+password = os.environ["_AIRFLOW_WWW_USER_PASSWORD"]
 email    = os.getenv("_AIRFLOW_WWW_USER_EMAIL",    "admin@agent4da.local")
 fname    = os.getenv("_AIRFLOW_WWW_USER_FIRSTNAME", "Admin")
 lname    = os.getenv("_AIRFLOW_WWW_USER_LASTNAME",  "Agent4DA")
@@ -93,5 +95,5 @@ TRIGGERER_PID=$!
 # 5. Webserver — foreground (PID 1 equivalent, giữ container alive)
 # ---------------------------------------------------------------------------
 log "Starting webserver on port 8080..."
-log "=== Airflow UI: http://localhost:8081 — user: admin / Admin123! ==="
+log "=== Airflow UI: http://localhost:8081 ==="
 exec airflow webserver --port 8080

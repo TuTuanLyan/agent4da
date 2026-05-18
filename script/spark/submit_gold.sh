@@ -3,12 +3,29 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=script/spark/load_env.sh
+. "${SCRIPT_DIR}/load_env.sh"
+
+require_env MINIO_ACCESS_KEY
+require_env MINIO_SECRET_KEY
+require_env ICEBERG_JDBC_USER
+require_env ICEBERG_JDBC_PASSWORD
+
 SPARK_SUBMIT_CONTAINER="${SPARK_SUBMIT_CONTAINER:-airflow}"
+SPARK_DRIVER_PYTHON="${SPARK_DRIVER_PYTHON:-/usr/local/bin/python3}"
+SPARK_EXECUTOR_PYTHON="${SPARK_EXECUTOR_PYTHON:-/usr/bin/python3}"
 GOLD_RUN_MODE="${GOLD_RUN_MODE:-all}"
 GOLD_REFRESH_MODE="${GOLD_REFRESH_MODE:-full_refresh}"
 GOLD_DRY_RUN="${GOLD_DRY_RUN:-false}"
 GOLD_VALIDATE_TABLES="${GOLD_VALIDATE_TABLES:-true}"
 SILVER_EVENTS_PATH="${SILVER_EVENTS_PATH:-s3a://silver/ecommerce_events/}"
+ICEBERG_CATALOG_NAME="${ICEBERG_CATALOG_NAME:-iceberg_catalog}"
+GOLD_NAMESPACE="${GOLD_NAMESPACE:-gold}"
+METADATA_NAMESPACE="${METADATA_NAMESPACE:-metadata}"
+ICEBERG_WAREHOUSE="${ICEBERG_WAREHOUSE:-s3a://gold/warehouse/}"
+ICEBERG_JDBC_URI="${ICEBERG_JDBC_URI:-jdbc:postgresql://postgres-db:5432/agent4da}"
+ICEBERG_JDBC_SCHEMA="${ICEBERG_JDBC_SCHEMA:-iceberg}"
 
 JARS_DIR="/opt/project/jars"
 JARS=(
@@ -46,58 +63,61 @@ echo "==> GOLD_DRY_RUN=${GOLD_DRY_RUN}"
 echo "==> SILVER_EVENTS_PATH=${SILVER_EVENTS_PATH}"
 
 docker exec \
-  -e MINIO_ENDPOINT=http://minio:9000 \
-  -e MINIO_ACCESS_KEY=admin \
-  -e MINIO_SECRET_KEY='Admin123!' \
+  -e MINIO_ENDPOINT="${MINIO_ENDPOINT}" \
+  -e MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY}" \
+  -e MINIO_SECRET_KEY="${MINIO_SECRET_KEY}" \
   -e SILVER_EVENTS_PATH="${SILVER_EVENTS_PATH}" \
-  -e ICEBERG_CATALOG_NAME=iceberg_catalog \
-  -e GOLD_NAMESPACE=gold \
-  -e METADATA_NAMESPACE=metadata \
-  -e ICEBERG_WAREHOUSE=s3a://gold/warehouse/ \
-  -e ICEBERG_JDBC_URI=jdbc:postgresql://postgres-db:5432/agent4da \
-  -e ICEBERG_JDBC_USER=bigdata \
-  -e ICEBERG_JDBC_PASSWORD='#3Bigdata' \
-  -e ICEBERG_JDBC_SCHEMA=iceberg \
+  -e ICEBERG_CATALOG_NAME="${ICEBERG_CATALOG_NAME}" \
+  -e GOLD_NAMESPACE="${GOLD_NAMESPACE}" \
+  -e METADATA_NAMESPACE="${METADATA_NAMESPACE}" \
+  -e ICEBERG_WAREHOUSE="${ICEBERG_WAREHOUSE}" \
+  -e ICEBERG_JDBC_URI="${ICEBERG_JDBC_URI}" \
+  -e ICEBERG_JDBC_USER="${ICEBERG_JDBC_USER}" \
+  -e ICEBERG_JDBC_PASSWORD="${ICEBERG_JDBC_PASSWORD}" \
+  -e ICEBERG_JDBC_SCHEMA="${ICEBERG_JDBC_SCHEMA}" \
   -e GOLD_RUN_MODE="${GOLD_RUN_MODE}" \
   -e GOLD_REFRESH_MODE="${GOLD_REFRESH_MODE}" \
   -e GOLD_DRY_RUN="${GOLD_DRY_RUN}" \
   -e GOLD_VALIDATE_TABLES="${GOLD_VALIDATE_TABLES}" \
   "${SPARK_SUBMIT_CONTAINER}" \
   /opt/spark/bin/spark-submit \
-  --master spark://spark-master:7077 \
+  --master "${SPARK_MASTER_URL}" \
   --driver-class-path "${CLASSPATH}" \
   --conf "spark.executor.extraClassPath=${CLASSPATH}" \
+  --conf "spark.pyspark.python=${SPARK_EXECUTOR_PYTHON}" \
+  --conf "spark.pyspark.driver.python=${SPARK_DRIVER_PYTHON}" \
+  --conf "spark.executorEnv.PYSPARK_PYTHON=${SPARK_EXECUTOR_PYTHON}" \
   --conf "spark.sql.extensions=org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions" \
-  --conf "spark.sql.catalog.iceberg_catalog=org.apache.iceberg.spark.SparkCatalog" \
-  --conf "spark.sql.catalog.iceberg_catalog.catalog-impl=org.apache.iceberg.jdbc.JdbcCatalog" \
-  --conf "spark.sql.catalog.iceberg_catalog.uri=jdbc:postgresql://postgres-db:5432/agent4da" \
-  --conf "spark.sql.catalog.iceberg_catalog.jdbc.user=bigdata" \
-  --conf "spark.sql.catalog.iceberg_catalog.jdbc.password=#3Bigdata" \
-  --conf "spark.sql.catalog.iceberg_catalog.jdbc.currentSchema=iceberg" \
-  --conf "spark.sql.catalog.iceberg_catalog.warehouse=s3a://gold/warehouse/" \
-  --conf "spark.sql.catalog.iceberg_catalog.io-impl=org.apache.iceberg.hadoop.HadoopFileIO" \
-  --conf "spark.hadoop.fs.s3a.endpoint=http://minio:9000" \
-  --conf "spark.hadoop.fs.s3a.access.key=admin" \
-  --conf "spark.hadoop.fs.s3a.secret.key=Admin123!" \
+  --conf "spark.sql.catalog.${ICEBERG_CATALOG_NAME}=org.apache.iceberg.spark.SparkCatalog" \
+  --conf "spark.sql.catalog.${ICEBERG_CATALOG_NAME}.catalog-impl=org.apache.iceberg.jdbc.JdbcCatalog" \
+  --conf "spark.sql.catalog.${ICEBERG_CATALOG_NAME}.uri=${ICEBERG_JDBC_URI}" \
+  --conf "spark.sql.catalog.${ICEBERG_CATALOG_NAME}.jdbc.user=${ICEBERG_JDBC_USER}" \
+  --conf "spark.sql.catalog.${ICEBERG_CATALOG_NAME}.jdbc.password=${ICEBERG_JDBC_PASSWORD}" \
+  --conf "spark.sql.catalog.${ICEBERG_CATALOG_NAME}.jdbc.currentSchema=${ICEBERG_JDBC_SCHEMA}" \
+  --conf "spark.sql.catalog.${ICEBERG_CATALOG_NAME}.warehouse=${ICEBERG_WAREHOUSE}" \
+  --conf "spark.sql.catalog.${ICEBERG_CATALOG_NAME}.io-impl=org.apache.iceberg.hadoop.HadoopFileIO" \
+  --conf "spark.hadoop.fs.s3a.endpoint=${MINIO_ENDPOINT}" \
+  --conf "spark.hadoop.fs.s3a.access.key=${MINIO_ACCESS_KEY}" \
+  --conf "spark.hadoop.fs.s3a.secret.key=${MINIO_SECRET_KEY}" \
   --conf "spark.hadoop.fs.s3a.path.style.access=true" \
   --conf "spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem" \
   --conf "spark.hadoop.fs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider" \
   --conf "spark.hadoop.fs.s3a.connection.ssl.enabled=false" \
-  --conf "spark.sql.shuffle.partitions=4" \
+  --conf "spark.sql.shuffle.partitions=${SPARK_SHUFFLE_PARTITIONS}" \
   --conf "spark.driver.extraJavaOptions=-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN" \
   --conf "spark.executor.extraJavaOptions=-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN" \
-  --conf "spark.executorEnv.MINIO_ENDPOINT=http://minio:9000" \
-  --conf "spark.executorEnv.MINIO_ACCESS_KEY=admin" \
-  --conf "spark.executorEnv.MINIO_SECRET_KEY=Admin123!" \
+  --conf "spark.executorEnv.MINIO_ENDPOINT=${MINIO_ENDPOINT}" \
+  --conf "spark.executorEnv.MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}" \
+  --conf "spark.executorEnv.MINIO_SECRET_KEY=${MINIO_SECRET_KEY}" \
   --conf "spark.executorEnv.SILVER_EVENTS_PATH=${SILVER_EVENTS_PATH}" \
-  --conf "spark.executorEnv.ICEBERG_CATALOG_NAME=iceberg_catalog" \
-  --conf "spark.executorEnv.GOLD_NAMESPACE=gold" \
-  --conf "spark.executorEnv.METADATA_NAMESPACE=metadata" \
-  --conf "spark.executorEnv.ICEBERG_WAREHOUSE=s3a://gold/warehouse/" \
-  --conf "spark.executorEnv.ICEBERG_JDBC_URI=jdbc:postgresql://postgres-db:5432/agent4da" \
-  --conf "spark.executorEnv.ICEBERG_JDBC_USER=bigdata" \
-  --conf "spark.executorEnv.ICEBERG_JDBC_PASSWORD=#3Bigdata" \
-  --conf "spark.executorEnv.ICEBERG_JDBC_SCHEMA=iceberg" \
+  --conf "spark.executorEnv.ICEBERG_CATALOG_NAME=${ICEBERG_CATALOG_NAME}" \
+  --conf "spark.executorEnv.GOLD_NAMESPACE=${GOLD_NAMESPACE}" \
+  --conf "spark.executorEnv.METADATA_NAMESPACE=${METADATA_NAMESPACE}" \
+  --conf "spark.executorEnv.ICEBERG_WAREHOUSE=${ICEBERG_WAREHOUSE}" \
+  --conf "spark.executorEnv.ICEBERG_JDBC_URI=${ICEBERG_JDBC_URI}" \
+  --conf "spark.executorEnv.ICEBERG_JDBC_USER=${ICEBERG_JDBC_USER}" \
+  --conf "spark.executorEnv.ICEBERG_JDBC_PASSWORD=${ICEBERG_JDBC_PASSWORD}" \
+  --conf "spark.executorEnv.ICEBERG_JDBC_SCHEMA=${ICEBERG_JDBC_SCHEMA}" \
   --conf "spark.executorEnv.GOLD_RUN_MODE=${GOLD_RUN_MODE}" \
   --conf "spark.executorEnv.GOLD_REFRESH_MODE=${GOLD_REFRESH_MODE}" \
   --conf "spark.executorEnv.GOLD_DRY_RUN=${GOLD_DRY_RUN}" \

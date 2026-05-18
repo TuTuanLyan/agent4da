@@ -1,5 +1,10 @@
 # Iceberg Gold Layer - Stage 3 Gold MVP ETL
 
+> Deprecated historical stage doc. Gold MVP loading now runs through
+> `code/spark/gold_job.py` with `GOLD_RUN_MODE=mvp_only`.
+> Legacy scripts/jobs are archived under `script/spark/_archive/` and
+> `code/spark/_archive/`.
+
 Stage 3 đọc dữ liệu sạch từ Silver Parquet trên MinIO và ghi vào các bảng Gold MVP Iceberg đã tạo ở Stage 2. Stage này chưa tạo Gold mở rộng, chưa tạo semantic metadata catalog cho Agent, chưa tích hợp Trino và không thay đổi Bronze/Silver.
 
 ## Input Silver
@@ -153,7 +158,7 @@ MERGE INTO để idempotency tốt hơn sẽ làm ở stage sau nếu cần.
 | --- | --- |
 | `MINIO_ENDPOINT` | `http://minio:9000` |
 | `MINIO_ACCESS_KEY` | `admin` |
-| `MINIO_SECRET_KEY` | `Admin123!` |
+| `MINIO_SECRET_KEY` | `change_me` |
 | `MINIO_BUCKET_SILVER` | `silver` |
 | `SILVER_EVENTS_PATH` | `s3a://silver/ecommerce_events/` |
 | `ICEBERG_CATALOG_NAME` | `iceberg_catalog` |
@@ -161,7 +166,7 @@ MERGE INTO để idempotency tốt hơn sẽ làm ở stage sau nếu cần.
 | `ICEBERG_WAREHOUSE` | `s3a://gold/warehouse/` |
 | `ICEBERG_JDBC_URI` | `jdbc:postgresql://postgres-db:5432/agent4da` |
 | `ICEBERG_JDBC_USER` | `bigdata` |
-| `ICEBERG_JDBC_PASSWORD` | `#3Bigdata` |
+| `ICEBERG_JDBC_PASSWORD` | `change_me` |
 | `ICEBERG_JDBC_SCHEMA` | `iceberg` |
 | `GOLD_WRITE_MODE` | `overwrite_partitions` |
 | `GOLD_VALIDATE_TABLES` | `true` |

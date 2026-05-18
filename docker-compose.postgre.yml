@@ -4,10 +4,10 @@ services:
     container_name: postgres-db
     restart: unless-stopped
 
+    env_file:
+      - ./envs/postgre.env
+
     environment:
-      POSTGRES_USER: bigdata
-      POSTGRES_PASSWORD: '#3Bigdata'
-      POSTGRES_DB: agent4da
       # Đặt search_path mặc định — tiện query không cần prefix schema
       POSTGRES_INITDB_ARGS: "--encoding=UTF8"
 
@@ -24,7 +24,7 @@ services:
 
     # Healthcheck — Airflow depends_on condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bigdata -d agent4da"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 10s
       timeout: 5s
       retries: 5

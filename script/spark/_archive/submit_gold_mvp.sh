@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Submit GoldSchemaInitJob manually from the host via the Airflow container.
+# Submit GoldMvpJob manually from the host via the Airflow container.
 
 set -euo pipefail
 
 SPARK_SUBMIT_CONTAINER="${SPARK_SUBMIT_CONTAINER:-airflow}"
-RESET_GOLD_SCHEMA="${RESET_GOLD_SCHEMA:-false}"
-ENABLE_GOLD_SCHEMA_TEST_DATA="${ENABLE_GOLD_SCHEMA_TEST_DATA:-false}"
+GOLD_WRITE_MODE="${GOLD_WRITE_MODE:-overwrite_partitions}"
+GOLD_DRY_RUN="${GOLD_DRY_RUN:-false}"
+RESET_DIMENSIONS="${RESET_DIMENSIONS:-false}"
+GOLD_VALIDATE_TABLES="${GOLD_VALIDATE_TABLES:-true}"
+SILVER_EVENTS_PATH="${SILVER_EVENTS_PATH:-s3a://silver/ecommerce_events/}"
 
 JARS_DIR="/opt/project/jars"
 
@@ -37,23 +40,29 @@ join_by() {
 
 CLASSPATH="$(join_by ":" "${JARS[@]}")"
 
-echo "==> Submitting GoldSchemaInitJob from container ${SPARK_SUBMIT_CONTAINER} ..."
-echo "==> RESET_GOLD_SCHEMA=${RESET_GOLD_SCHEMA}"
-echo "==> ENABLE_GOLD_SCHEMA_TEST_DATA=${ENABLE_GOLD_SCHEMA_TEST_DATA}"
+echo "==> Submitting GoldMvpJob from container ${SPARK_SUBMIT_CONTAINER} ..."
+echo "==> SILVER_EVENTS_PATH=${SILVER_EVENTS_PATH}"
+echo "==> GOLD_WRITE_MODE=${GOLD_WRITE_MODE}"
+echo "==> GOLD_DRY_RUN=${GOLD_DRY_RUN}"
+echo "==> RESET_DIMENSIONS=${RESET_DIMENSIONS}"
 
 docker exec \
   -e MINIO_ENDPOINT=http://minio:9000 \
   -e MINIO_ACCESS_KEY=admin \
-  -e MINIO_SECRET_KEY='Admin123!' \
+  -e MINIO_SECRET_KEY='change_me' \
+  -e MINIO_BUCKET_SILVER=silver \
+  -e SILVER_EVENTS_PATH="${SILVER_EVENTS_PATH}" \
   -e ICEBERG_CATALOG_NAME=iceberg_catalog \
   -e ICEBERG_NAMESPACE=gold \
   -e ICEBERG_WAREHOUSE=s3a://gold/warehouse/ \
   -e ICEBERG_JDBC_URI=jdbc:postgresql://postgres-db:5432/agent4da \
   -e ICEBERG_JDBC_USER=bigdata \
-  -e ICEBERG_JDBC_PASSWORD='#3Bigdata' \
+  -e ICEBERG_JDBC_PASSWORD='change_me' \
   -e ICEBERG_JDBC_SCHEMA=iceberg \
-  -e RESET_GOLD_SCHEMA="${RESET_GOLD_SCHEMA}" \
-  -e ENABLE_GOLD_SCHEMA_TEST_DATA="${ENABLE_GOLD_SCHEMA_TEST_DATA}" \
+  -e GOLD_WRITE_MODE="${GOLD_WRITE_MODE}" \
+  -e GOLD_VALIDATE_TABLES="${GOLD_VALIDATE_TABLES}" \
+  -e GOLD_DRY_RUN="${GOLD_DRY_RUN}" \
+  -e RESET_DIMENSIONS="${RESET_DIMENSIONS}" \
   "${SPARK_SUBMIT_CONTAINER}" \
   /opt/spark/bin/spark-submit \
   --master spark://spark-master:7077 \
@@ -64,13 +73,13 @@ docker exec \
   --conf "spark.sql.catalog.iceberg_catalog.catalog-impl=org.apache.iceberg.jdbc.JdbcCatalog" \
   --conf "spark.sql.catalog.iceberg_catalog.uri=jdbc:postgresql://postgres-db:5432/agent4da" \
   --conf "spark.sql.catalog.iceberg_catalog.jdbc.user=bigdata" \
-  --conf "spark.sql.catalog.iceberg_catalog.jdbc.password=#3Bigdata" \
+  --conf "spark.sql.catalog.iceberg_catalog.jdbc.password=change_me" \
   --conf "spark.sql.catalog.iceberg_catalog.jdbc.currentSchema=iceberg" \
   --conf "spark.sql.catalog.iceberg_catalog.warehouse=s3a://gold/warehouse/" \
   --conf "spark.sql.catalog.iceberg_catalog.io-impl=org.apache.iceberg.hadoop.HadoopFileIO" \
   --conf "spark.hadoop.fs.s3a.endpoint=http://minio:9000" \
   --conf "spark.hadoop.fs.s3a.access.key=admin" \
-  --conf "spark.hadoop.fs.s3a.secret.key=Admin123!" \
+  --conf "spark.hadoop.fs.s3a.secret.key=change_me" \
   --conf "spark.hadoop.fs.s3a.path.style.access=true" \
   --conf "spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem" \
   --conf "spark.hadoop.fs.s3a.aws.credentials.provider=org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider" \
@@ -80,16 +89,20 @@ docker exec \
   --conf "spark.executor.extraJavaOptions=-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN" \
   --conf "spark.executorEnv.MINIO_ENDPOINT=http://minio:9000" \
   --conf "spark.executorEnv.MINIO_ACCESS_KEY=admin" \
-  --conf "spark.executorEnv.MINIO_SECRET_KEY=Admin123!" \
+  --conf "spark.executorEnv.MINIO_SECRET_KEY=change_me" \
+  --conf "spark.executorEnv.MINIO_BUCKET_SILVER=silver" \
+  --conf "spark.executorEnv.SILVER_EVENTS_PATH=${SILVER_EVENTS_PATH}" \
   --conf "spark.executorEnv.ICEBERG_CATALOG_NAME=iceberg_catalog" \
   --conf "spark.executorEnv.ICEBERG_NAMESPACE=gold" \
   --conf "spark.executorEnv.ICEBERG_WAREHOUSE=s3a://gold/warehouse/" \
   --conf "spark.executorEnv.ICEBERG_JDBC_URI=jdbc:postgresql://postgres-db:5432/agent4da" \
   --conf "spark.executorEnv.ICEBERG_JDBC_USER=bigdata" \
-  --conf "spark.executorEnv.ICEBERG_JDBC_PASSWORD=#3Bigdata" \
+  --conf "spark.executorEnv.ICEBERG_JDBC_PASSWORD=change_me" \
   --conf "spark.executorEnv.ICEBERG_JDBC_SCHEMA=iceberg" \
-  --conf "spark.executorEnv.RESET_GOLD_SCHEMA=${RESET_GOLD_SCHEMA}" \
-  --conf "spark.executorEnv.ENABLE_GOLD_SCHEMA_TEST_DATA=${ENABLE_GOLD_SCHEMA_TEST_DATA}" \
-  /opt/project/code/spark/gold_schema_init.py
+  --conf "spark.executorEnv.GOLD_WRITE_MODE=${GOLD_WRITE_MODE}" \
+  --conf "spark.executorEnv.GOLD_VALIDATE_TABLES=${GOLD_VALIDATE_TABLES}" \
+  --conf "spark.executorEnv.GOLD_DRY_RUN=${GOLD_DRY_RUN}" \
+  --conf "spark.executorEnv.RESET_DIMENSIONS=${RESET_DIMENSIONS}" \
+  /opt/project/code/spark/gold_mvp_job.py
 
 echo "==> Done."

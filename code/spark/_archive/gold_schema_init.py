@@ -22,7 +22,7 @@ def env(name, default):
 
 MINIO_ENDPOINT = env("MINIO_ENDPOINT", "http://minio:9000")
 MINIO_ACCESS_KEY = env("MINIO_ACCESS_KEY", "admin")
-MINIO_SECRET_KEY = env("MINIO_SECRET_KEY", "Admin123!")
+MINIO_SECRET_KEY = env("MINIO_SECRET_KEY", "change_me")
 
 ICEBERG_CATALOG_NAME = env("ICEBERG_CATALOG_NAME", "iceberg_catalog")
 ICEBERG_NAMESPACE = env("ICEBERG_NAMESPACE", "gold")
@@ -32,7 +32,7 @@ ICEBERG_JDBC_URI = env(
     "jdbc:postgresql://postgres-db:5432/agent4da",
 )
 ICEBERG_JDBC_USER = env("ICEBERG_JDBC_USER", "bigdata")
-ICEBERG_JDBC_PASSWORD = env("ICEBERG_JDBC_PASSWORD", "#3Bigdata")
+ICEBERG_JDBC_PASSWORD = env("ICEBERG_JDBC_PASSWORD", "change_me")
 ICEBERG_JDBC_SCHEMA = env("ICEBERG_JDBC_SCHEMA", "iceberg")
 RESET_GOLD_SCHEMA = env("RESET_GOLD_SCHEMA", "false").strip().lower() == "true"
 ENABLE_GOLD_SCHEMA_TEST_DATA = (

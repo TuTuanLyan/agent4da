@@ -1,5 +1,10 @@
 # Iceberg Gold Layer - Stage 4 Gold Extended
 
+> Deprecated historical stage doc. Gold extended loading now runs through
+> `code/spark/gold_job.py` with `GOLD_RUN_MODE=extended_only`.
+> Legacy scripts/jobs are archived under `script/spark/_archive/` and
+> `code/spark/_archive/`.
+
 Stage 4 mở rộng Gold Layer bằng các bảng analytics cho user/session, product, category và brand. Nguồn dữ liệu là các bảng Gold MVP đã nạp ở Stage 3. Stage này chưa tạo semantic metadata catalog, chưa tích hợp Trino/Agent và chưa triển khai MERGE INTO nâng cao.
 
 ## Bảng Được Tạo
@@ -119,13 +124,13 @@ ORDER BY table_name;
 | --- | --- |
 | `MINIO_ENDPOINT` | `http://minio:9000` |
 | `MINIO_ACCESS_KEY` | `admin` |
-| `MINIO_SECRET_KEY` | `Admin123!` |
+| `MINIO_SECRET_KEY` | `change_me` |
 | `ICEBERG_CATALOG_NAME` | `iceberg_catalog` |
 | `ICEBERG_NAMESPACE` | `gold` |
 | `ICEBERG_WAREHOUSE` | `s3a://gold/warehouse/` |
 | `ICEBERG_JDBC_URI` | `jdbc:postgresql://postgres-db:5432/agent4da` |
 | `ICEBERG_JDBC_USER` | `bigdata` |
-| `ICEBERG_JDBC_PASSWORD` | `#3Bigdata` |
+| `ICEBERG_JDBC_PASSWORD` | `change_me` |
 | `ICEBERG_JDBC_SCHEMA` | `iceberg` |
 | `RESET_GOLD_EXTENDED_SCHEMA` | `false` |
 | `GOLD_EXTENDED_WRITE_MODE` | `overwrite_partitions` |

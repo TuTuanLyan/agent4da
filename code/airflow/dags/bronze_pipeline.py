@@ -9,39 +9,15 @@ from datetime import datetime, timedelta
 from airflow.decorators import dag
 from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
 
-# ---------------------------------------------------------------------------
-# Jars — mount tại /opt/project/jars/ trong cả airflow và spark containers
-#
-# Dùng classpath local thay vì --jars.
-# Vì /opt/project/jars được mount sẵn vào Airflow, spark-master và spark-worker,
-# ta không cần Spark copy jar vào log/spark/app-* cho từng application.
-#
-# Bỏ bundle-2.29.52.jar plain (trùng với software.amazon.awssdk_bundle-2.29.52.jar)
-# → tránh SLF4J duplicate binding + ClassLoader conflict
-# ---------------------------------------------------------------------------
-_J = "/opt/project/jars"
+from dag_common import (
+    base_spark_conf,
+    build_classpath,
+    env,
+    minio_executor_conf,
+)
 
-_JARS = [
-    # Hadoop S3A
-    f"{_J}/org.apache.hadoop_hadoop-aws-3.4.2.jar",
-    f"{_J}/org.apache.hadoop_hadoop-client-api-3.4.2.jar",
-    f"{_J}/org.apache.hadoop_hadoop-client-runtime-3.4.2.jar",
-    # AWS SDK — chỉ dùng bản có prefix tên đầy đủ, bỏ bundle-2.29.52.jar plain
-    f"{_J}/software.amazon.awssdk_bundle-2.29.52.jar",
-    # Kafka connector
-    f"{_J}/org.apache.spark_spark-sql-kafka-0-10_2.13-4.1.1.jar",
-    f"{_J}/org.apache.spark_spark-token-provider-kafka-0-10_2.13-4.1.1.jar",
-    f"{_J}/org.apache.kafka_kafka-clients-3.9.1.jar",
-    # Runtime deps
-    f"{_J}/org.apache.commons_commons-pool2-2.12.1.jar",
-    f"{_J}/org.lz4_lz4-java-1.8.0.jar",
-    f"{_J}/org.xerial.snappy_snappy-java-1.1.10.8.jar",
-    f"{_J}/org.slf4j_slf4j-api-2.0.17.jar",
-    f"{_J}/org.scala-lang.modules_scala-parallel-collections_2.13-1.2.0.jar",
-]
 
-# classpath: colon-separated (Linux JVM convention)
-CLASSPATH = ":".join(_JARS)
+CLASSPATH = build_classpath()
 
 # ---------------------------------------------------------------------------
 default_args = {
@@ -65,6 +41,15 @@ default_args = {
     tags=["bronze", "kafka", "spark"],
 )
 def bronze_pipeline():
+    conf = base_spark_conf(CLASSPATH)
+    conf.update(minio_executor_conf())
+    conf.update(
+        {
+            "spark.executorEnv.KAFKA_BOOTSTRAP": env("KAFKA_BOOTSTRAP", "kafka-kraft:29092"),
+            "spark.executorEnv.KAFKA_TOPIC": env("KAFKA_TOPIC", "ecommerce_events"),
+            "spark.executorEnv.MINIO_BUCKET_BRONZE": env("MINIO_BUCKET_BRONZE", "bronze"),
+        }
+    )
 
     SparkSubmitOperator(
         task_id="spark_bronze_job",
@@ -81,27 +66,7 @@ def bronze_pipeline():
         # --driver-class-path: JVM classpath cho driver process (colon-separated)
         driver_class_path=CLASSPATH,
 
-        conf={
-            "spark.executor.extraClassPath": CLASSPATH,
-
-            "spark.pyspark.python": "/usr/bin/python3",
-            "spark.pyspark.driver.python": "/usr/bin/python3",
-            "spark.executorEnv.PYSPARK_PYTHON": "/usr/bin/python3",
-
-            "spark.driver.extraJavaOptions":
-                "-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN",
-            "spark.executor.extraJavaOptions":
-                "-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN",
-
-            "spark.executorEnv.KAFKA_BOOTSTRAP": "kafka-kraft:29092",
-            "spark.executorEnv.KAFKA_TOPIC": "ecommerce_events",
-            "spark.executorEnv.MINIO_ENDPOINT": "http://minio:9000",
-            "spark.executorEnv.MINIO_ACCESS_KEY": "admin",
-            "spark.executorEnv.MINIO_SECRET_KEY": "Admin123!",
-            "spark.executorEnv.MINIO_BUCKET_BRONZE": "bronze",
-
-            "spark.sql.shuffle.partitions": "4",
-        },
+        conf=conf,
 
         # Không dùng packages — tránh Ivy resolver chạy mỗi lần submit
         packages=None,

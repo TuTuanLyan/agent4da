@@ -20,6 +20,14 @@ Airflow điều phối Spark jobs qua `SparkSubmitOperator`.
 - Lịch chạy: mỗi 10 phút
 - Mục tiêu: MinIO Bronze Parquet đến MinIO Silver clean Parquet
 
+### gold_pipeline
+
+- File: `gold_pipeline.py`
+- Task: `gold_job`
+- App: `/opt/project/code/spark/gold_job.py`
+- Lịch chạy: manual
+- Mục tiêu: Silver clean Parquet đến Gold Iceberg analytics tables và metadata catalog
+
 ## Cấu hình chung
 
 - `conn_id`: `spark_default`
@@ -28,6 +36,7 @@ Airflow điều phối Spark jobs qua `SparkSubmitOperator`.
 - `retries`: `1`
 - `retry_delay`: 3 phút
 - `execution_timeout`: 15 phút
+- Secret được đọc từ Airflow environment, không hardcode trong DAG.
 
 ## JARs
 
@@ -52,4 +61,5 @@ Mục tiêu là tránh Ivy resolver và tránh tải dependency lại mỗi lầ
 
 - Bronze vẫn giữ logic offset trên MinIO để hạn chế đọc trùng Kafka.
 - Silver dedup valid records theo `source_event_id`.
-- Gold, Iceberg, Trino chưa triển khai trong bước này.
+- Gold chính chỉ còn `gold_pipeline.py`.
+- Các DAG Gold stage cũ nằm trong `_disabled/*.py.disabled`.

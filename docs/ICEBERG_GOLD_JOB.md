@@ -154,7 +154,7 @@ ORDER BY table_namespace, table_name;
 ```text
 MINIO_ENDPOINT=http://minio:9000
 MINIO_ACCESS_KEY=admin
-MINIO_SECRET_KEY=Admin123!
+MINIO_SECRET_KEY=change_me
 SILVER_EVENTS_PATH=s3a://silver/ecommerce_events/
 ICEBERG_CATALOG_NAME=iceberg_catalog
 GOLD_NAMESPACE=gold
@@ -162,7 +162,7 @@ METADATA_NAMESPACE=metadata
 ICEBERG_WAREHOUSE=s3a://gold/warehouse/
 ICEBERG_JDBC_URI=jdbc:postgresql://postgres-db:5432/agent4da
 ICEBERG_JDBC_USER=bigdata
-ICEBERG_JDBC_PASSWORD=#3Bigdata
+ICEBERG_JDBC_PASSWORD=change_me
 ICEBERG_JDBC_SCHEMA=iceberg
 GOLD_RUN_MODE=all
 GOLD_REFRESH_MODE=full_refresh

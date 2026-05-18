@@ -77,7 +77,7 @@ Bucket `gold` cần tồn tại trước khi chạy smoke test. Repo hiện chư
 
 ```bash
 docker run --rm --network data_network minio/mc sh -c \
-  'mc alias set local http://minio:9000 admin Admin123! && mc mb --ignore-existing local/gold'
+  'mc alias set local http://minio:9000 admin change_me && mc mb --ignore-existing local/gold'
 ```
 
 Sau smoke test, kiểm tra bucket `gold` có prefix `warehouse/`.

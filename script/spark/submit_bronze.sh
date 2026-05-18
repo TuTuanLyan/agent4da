@@ -1,21 +1,22 @@
-#!/bin/bash
-# =============================================================================
-# submit_bronze.sh — submit BronzeBatchJob thủ công (bypass Airflow)
-#
-# Dùng để test/debug trực tiếp mà không cần trigger DAG.
-# Jars mount tại /opt/project/jars/ trong spark-master và spark-worker.
-#
-# FIX: --driver-class-path dùng ":" (Linux path separator).
-#      Không dùng --jars vì jars đã được mount sẵn ở /opt/project/jars.
-# =============================================================================
+#!/usr/bin/env bash
+# Submit BronzeBatchJob manually.
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=script/spark/load_env.sh
+. "${SCRIPT_DIR}/load_env.sh"
+
+require_env MINIO_ACCESS_KEY
+require_env MINIO_SECRET_KEY
+
+SPARK_SUBMIT_CONTAINER="${SPARK_MASTER_CONTAINER:-spark-master}"
+SPARK_DRIVER_PYTHON_IN_SPARK="${SPARK_DRIVER_PYTHON_IN_SPARK:-/usr/bin/python3}"
+SPARK_EXECUTOR_PYTHON="${SPARK_EXECUTOR_PYTHON:-/usr/bin/python3}"
+KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-kafka-kraft:29092}"
+KAFKA_TOPIC="${KAFKA_TOPIC:-ecommerce_events}"
 
 JARS_DIR="/opt/project/jars"
-
-# Classpath cho driver và executor (separator = ":" — Linux convention).
-# Không dùng --jars vì /opt/project/jars đã được mount sẵn vào Spark containers.
-# Nếu dùng --jars, Spark sẽ copy jar vào log/spark/app-* cho mỗi lần chạy.
 CLASSPATH="${JARS_DIR}/org.apache.hadoop_hadoop-aws-3.4.2.jar:\
 ${JARS_DIR}/org.apache.hadoop_hadoop-client-api-3.4.2.jar:\
 ${JARS_DIR}/org.apache.hadoop_hadoop-client-runtime-3.4.2.jar:\
@@ -31,18 +32,28 @@ ${JARS_DIR}/org.scala-lang.modules_scala-parallel-collections_2.13-1.2.0.jar"
 
 echo "==> Submitting BronzeBatchJob ..."
 
-docker exec spark-master \
+docker exec \
+  -e KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP}" \
+  -e KAFKA_TOPIC="${KAFKA_TOPIC}" \
+  -e MINIO_ENDPOINT="${MINIO_ENDPOINT}" \
+  -e MINIO_ACCESS_KEY="${MINIO_ACCESS_KEY}" \
+  -e MINIO_SECRET_KEY="${MINIO_SECRET_KEY}" \
+  -e MINIO_BUCKET_BRONZE="${MINIO_BUCKET_BRONZE}" \
+  "${SPARK_SUBMIT_CONTAINER}" \
   /opt/spark/bin/spark-submit \
-  --master spark://spark-master:7077 \
+  --master "${SPARK_MASTER_URL}" \
   --driver-class-path "${CLASSPATH}" \
   --conf "spark.executor.extraClassPath=${CLASSPATH}" \
-  --conf "spark.executorEnv.KAFKA_BOOTSTRAP=kafka-kraft:29092" \
-  --conf "spark.executorEnv.KAFKA_TOPIC=ecommerce_events" \
-  --conf "spark.executorEnv.MINIO_ENDPOINT=http://minio:9000" \
-  --conf "spark.executorEnv.MINIO_ACCESS_KEY=admin" \
-  --conf "spark.executorEnv.MINIO_SECRET_KEY=Admin123!" \
-  --conf "spark.executorEnv.MINIO_BUCKET_BRONZE=bronze" \
-  --conf "spark.sql.shuffle.partitions=4" \
+  --conf "spark.pyspark.python=${SPARK_EXECUTOR_PYTHON}" \
+  --conf "spark.pyspark.driver.python=${SPARK_DRIVER_PYTHON_IN_SPARK}" \
+  --conf "spark.executorEnv.PYSPARK_PYTHON=${SPARK_EXECUTOR_PYTHON}" \
+  --conf "spark.executorEnv.KAFKA_BOOTSTRAP=${KAFKA_BOOTSTRAP}" \
+  --conf "spark.executorEnv.KAFKA_TOPIC=${KAFKA_TOPIC}" \
+  --conf "spark.executorEnv.MINIO_ENDPOINT=${MINIO_ENDPOINT}" \
+  --conf "spark.executorEnv.MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}" \
+  --conf "spark.executorEnv.MINIO_SECRET_KEY=${MINIO_SECRET_KEY}" \
+  --conf "spark.executorEnv.MINIO_BUCKET_BRONZE=${MINIO_BUCKET_BRONZE}" \
+  --conf "spark.sql.shuffle.partitions=${SPARK_SHUFFLE_PARTITIONS}" \
   --conf "spark.driver.extraJavaOptions=-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN" \
   --conf "spark.executor.extraJavaOptions=-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN" \
   /opt/spark/work/bronze_job.py

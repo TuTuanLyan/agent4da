@@ -79,14 +79,14 @@ def gold_mvp_pipeline():
             "spark.sql.catalog.iceberg_catalog.uri":
                 "jdbc:postgresql://postgres-db:5432/agent4da",
             "spark.sql.catalog.iceberg_catalog.jdbc.user": "bigdata",
-            "spark.sql.catalog.iceberg_catalog.jdbc.password": "#3Bigdata",
+            "spark.sql.catalog.iceberg_catalog.jdbc.password": "change_me",
             "spark.sql.catalog.iceberg_catalog.jdbc.currentSchema": "iceberg",
             "spark.sql.catalog.iceberg_catalog.warehouse": "s3a://gold/warehouse/",
             "spark.sql.catalog.iceberg_catalog.io-impl":
                 "org.apache.iceberg.hadoop.HadoopFileIO",
             "spark.hadoop.fs.s3a.endpoint": "http://minio:9000",
             "spark.hadoop.fs.s3a.access.key": "admin",
-            "spark.hadoop.fs.s3a.secret.key": "Admin123!",
+            "spark.hadoop.fs.s3a.secret.key": "change_me",
             "spark.hadoop.fs.s3a.path.style.access": "true",
             "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem",
             "spark.hadoop.fs.s3a.aws.credentials.provider":
@@ -99,7 +99,7 @@ def gold_mvp_pipeline():
                 "-Dorg.slf4j.simpleLogger.defaultLogLevel=WARN",
             "spark.executorEnv.MINIO_ENDPOINT": "http://minio:9000",
             "spark.executorEnv.MINIO_ACCESS_KEY": "admin",
-            "spark.executorEnv.MINIO_SECRET_KEY": "Admin123!",
+            "spark.executorEnv.MINIO_SECRET_KEY": "change_me",
             "spark.executorEnv.MINIO_BUCKET_SILVER": "silver",
             "spark.executorEnv.SILVER_EVENTS_PATH": "s3a://silver/ecommerce_events/",
             "spark.executorEnv.ICEBERG_CATALOG_NAME": "iceberg_catalog",
@@ -108,7 +108,7 @@ def gold_mvp_pipeline():
             "spark.executorEnv.ICEBERG_JDBC_URI":
                 "jdbc:postgresql://postgres-db:5432/agent4da",
             "spark.executorEnv.ICEBERG_JDBC_USER": "bigdata",
-            "spark.executorEnv.ICEBERG_JDBC_PASSWORD": "#3Bigdata",
+            "spark.executorEnv.ICEBERG_JDBC_PASSWORD": "change_me",
             "spark.executorEnv.ICEBERG_JDBC_SCHEMA": "iceberg",
             "spark.executorEnv.GOLD_WRITE_MODE": "overwrite_partitions",
             "spark.executorEnv.GOLD_VALIDATE_TABLES": "true",

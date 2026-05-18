@@ -6,21 +6,20 @@ Spark Bronze Batch Job
 - Cập nhật offset để lần sau không đọc trùng
 """
 
-import os
 import json
-from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, current_timestamp, from_json, to_date
 from pyspark.sql.types import StringType, StructField, StructType
+
+from common.config import load_config
+from common.spark_session import create_spark_session as build_spark_session
 
 # ---------------------------------------------------------------------------
 # Cấu hình từ biến môi trường (có fallback)
 # ---------------------------------------------------------------------------
-KAFKA_BOOTSTRAP = os.getenv("KAFKA_BOOTSTRAP", "kafka-kraft:29092")
-KAFKA_TOPIC     = os.getenv("KAFKA_TOPIC", "ecommerce_events")
-MINIO_ENDPOINT  = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
-MINIO_ACCESS    = os.getenv("MINIO_ACCESS_KEY", "admin")
-MINIO_SECRET    = os.getenv("MINIO_SECRET_KEY", "Admin123!")
-BRONZE_BUCKET   = os.getenv("MINIO_BUCKET_BRONZE", "bronze")
+CONFIG = load_config(validate_gold=False)
+KAFKA_BOOTSTRAP = CONFIG.kafka_bootstrap
+KAFKA_TOPIC     = CONFIG.kafka_topic
+BRONZE_BUCKET   = CONFIG.minio.bronze_bucket
 
 OUTPUT_PATH  = f"s3a://{BRONZE_BUCKET}/ecommerce_events/"
 OFFSET_FILE  = f"s3a://{BRONZE_BUCKET}/_offsets/ecommerce_events.json"
@@ -42,26 +41,7 @@ ECOMMERCE_SCHEMA = StructType([
 # Tạo SparkSession — jars được mount sẵn và truyền qua local classpath
 # ---------------------------------------------------------------------------
 def create_spark_session():
-    return (
-        SparkSession.builder
-        .appName("BronzeBatchJob")
-        .config("spark.hadoop.fs.s3a.endpoint",          MINIO_ENDPOINT)
-        .config("spark.hadoop.fs.s3a.access.key",        MINIO_ACCESS)
-        .config("spark.hadoop.fs.s3a.secret.key",        MINIO_SECRET)
-        .config("spark.hadoop.fs.s3a.path.style.access", "true")
-        .config("spark.hadoop.fs.s3a.impl",
-                "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config("spark.hadoop.fs.s3a.aws.credentials.provider",
-                "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider")
-        .config("spark.hadoop.fs.s3a.connection.ssl.enabled",      "false")
-        .config("spark.hadoop.fs.s3a.connection.timeout",          "60000")
-        .config("spark.hadoop.fs.s3a.connection.establish.timeout","60000")
-        .config("spark.hadoop.fs.s3a.connection.maximum",          "100")
-        .config("spark.hadoop.fs.s3a.socket.timeout",              "60000")
-        .config("spark.hadoop.fs.s3a.threads.max",                 "20")
-        .config("spark.sql.shuffle.partitions", "4")
-        .getOrCreate()
-    )
+    return build_spark_session("BronzeBatchJob", pipeline_config=CONFIG)
 
 # ---------------------------------------------------------------------------
 # Quản lý offset: đọc/ghi JSON trên MinIO

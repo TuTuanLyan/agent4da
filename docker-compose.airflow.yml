@@ -41,13 +41,7 @@ services:
       # Airflow dùng giá trị này để build URL log: http://airflow:8793/log/...
       AIRFLOW__CORE__HOSTNAME_CALLABLE: "socket.gethostname"
 
-      # ── Database — Postgres, schema airflow ──────────────────────────────
-      # airflow_user chỉ có quyền trên schema airflow — tạo bởi 01_init_schemas.sql
-      # search_path=airflow → mọi table Airflow nằm trong schema "airflow"
-      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://airflow_user:Airflow123!@postgres-db:5432/agent4da?options=-csearch_path%3Dairflow"
-
       # ── Webserver ────────────────────────────────────────────────────────
-      AIRFLOW__WEBSERVER__SECRET_KEY: "agent4da-sprint0-secret"
       AIRFLOW__WEBSERVER__BASE_URL: "http://localhost:8081"
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
       AIRFLOW__WEBSERVER__LOG_FETCH_TIMEOUT_SEC: "30"
@@ -66,21 +60,15 @@ services:
       AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
       AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "false"
 
-      # ── Admin user — đọc bởi entrypoint.sh ──────────────────────────────
-      _AIRFLOW_WWW_USER_USERNAME: "admin"
-      _AIRFLOW_WWW_USER_PASSWORD: "Admin123!"
-      _AIRFLOW_WWW_USER_FIRSTNAME: "Admin"
-      _AIRFLOW_WWW_USER_LASTNAME: "Agent4DA"
-      _AIRFLOW_WWW_USER_EMAIL: "admin@agent4da.local"
-
       # ── Connections ──────────────────────────────────────────────────────
       # SparkSubmitOperator dùng conn_id="spark_default"
       AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type":"spark","host":"spark://spark-master","port":7077}'
-      # Postgres connection cho PostgresOperator / future use
-      AIRFLOW_CONN_POSTGRES_DEFAULT: "postgresql+psycopg2://bigdata:%233Bigdata@postgres-db:5432/agent4da"
 
     env_file:
-      - ./envs/airflow.env    # KAFKA_BOOTSTRAP, MINIO_ENDPOINT, MINIO_ACCESS_KEY, ...
+      - ./envs/airflow.env
+      - ./envs/minio.env
+      - ./envs/iceberg.env
+      - ./envs/spark.env
 
     volumes:
       - ./code/airflow/dags:/opt/project/dags     # DAG files
@@ -107,16 +95,17 @@ services:
 
   # ── PostgreSQL ─────────────────────────────────────────────────────────────
   # Shared instance — nhiều schema cho nhiều mục đích khác nhau
-  # Xem init/01_init_schemas.sql để biết schema layout
+  # Xem init/01_init_schemas.sh để biết schema layout
   postgres:
     image: postgres:16-alpine
     container_name: postgres-db
     restart: unless-stopped
 
+    env_file:
+      - ./envs/postgre.env
+
     environment:
-      POSTGRES_USER: bigdata
-      POSTGRES_PASSWORD: '#3Bigdata'
-      POSTGRES_DB: agent4da
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
 
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -130,14 +119,11 @@ services:
       - "5432:5432"
 
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bigdata -d agent4da"]
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 10s
-
-    security_opt:
-      - apparmor=unconfined
 
 # ── Networks & Volumes ────────────────────────────────────────────────────────
 networks:

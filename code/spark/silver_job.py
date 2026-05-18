@@ -11,9 +11,6 @@ input can still append duplicate records across runs. Use
 SILVER_WRITE_MODE=overwrite only for local/test resets.
 """
 
-import os
-
-from pyspark.sql import SparkSession
 from pyspark.errors import AnalysisException
 from pyspark.sql.functions import (
     col,
@@ -35,6 +32,9 @@ from pyspark.sql.functions import (
 )
 from pyspark.sql.window import Window
 
+from common.config import load_config
+from common.spark_session import create_spark_session as build_spark_session
+
 
 JOB_NAME = "SilverEcommerceEventsJob"
 
@@ -46,12 +46,10 @@ def log(message):
 # ---------------------------------------------------------------------------
 # Environment config with safe defaults for the Docker stack
 # ---------------------------------------------------------------------------
-MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "http://minio:9000")
-MINIO_ACCESS = os.getenv("MINIO_ACCESS_KEY", "admin")
-MINIO_SECRET = os.getenv("MINIO_SECRET_KEY", "Admin123!")
-BRONZE_BUCKET = os.getenv("MINIO_BUCKET_BRONZE", "bronze")
-SILVER_BUCKET = os.getenv("MINIO_BUCKET_SILVER", "silver")
-SILVER_WRITE_MODE = os.getenv("SILVER_WRITE_MODE", "append").strip().lower()
+CONFIG = load_config(validate_gold=False)
+BRONZE_BUCKET = CONFIG.minio.bronze_bucket
+SILVER_BUCKET = CONFIG.minio.silver_bucket
+SILVER_WRITE_MODE = CONFIG.silver_write_mode
 
 INPUT_PATH = f"s3a://{BRONZE_BUCKET}/ecommerce_events/"
 VALID_OUTPUT_PATH = f"s3a://{SILVER_BUCKET}/ecommerce_events/"
@@ -89,22 +87,10 @@ SILVER_COLUMNS = [
 
 
 def create_spark_session():
-    return (
-        SparkSession.builder
-        .appName(JOB_NAME)
-        .config("spark.hadoop.fs.s3a.endpoint", MINIO_ENDPOINT)
-        .config("spark.hadoop.fs.s3a.access.key", MINIO_ACCESS)
-        .config("spark.hadoop.fs.s3a.secret.key", MINIO_SECRET)
-        .config("spark.hadoop.fs.s3a.path.style.access", "true")
-        .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
-        .config(
-            "spark.hadoop.fs.s3a.aws.credentials.provider",
-            "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider",
-        )
-        .config("spark.hadoop.fs.s3a.connection.ssl.enabled", "false")
-        .config("spark.sql.session.timeZone", "UTC")
-        .config("spark.sql.shuffle.partitions", "4")
-        .getOrCreate()
+    return build_spark_session(
+        JOB_NAME,
+        pipeline_config=CONFIG,
+        session_timezone="UTC",
     )
 
 
