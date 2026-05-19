@@ -5,18 +5,23 @@ Read Bronze e-commerce events from MinIO, normalize types, add data-quality
 flags, and write clean Silver Parquet outputs.
 
 Note on idempotency:
-This job deduplicates records inside the current batch by source_event_id.
-Because the output is plain Parquet in append mode, rerunning the same Bronze
-input can still append duplicate records across runs. Use
-SILVER_WRITE_MODE=overwrite only for local/test resets.
+source_event_id is kept for Kafka lineage. event_fingerprint is built from the
+business event content and is used for deduplication. In append mode, the job
+reads existing Silver fingerprints and left-anti joins before writing, so reruns
+or repeated ingestion of the same file do not append duplicate valid events.
+Because the output is still plain Parquet, this is intended for batch
+single-writer usage. Use Iceberg/Delta MERGE later if multiple Silver jobs can
+write at the same time.
 """
 
 from pyspark.errors import AnalysisException
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
     col,
+    coalesce,
     concat_ws,
     current_timestamp,
+    date_format,
     dayofmonth,
     expr,
     hour,
@@ -25,8 +30,12 @@ from pyspark.sql.functions import (
     month,
     regexp_replace,
     row_number,
+    sha2,
     to_date,
     trim,
+    split,
+    size,
+    slice,
     try_to_timestamp,
     when,
     year,
@@ -48,6 +57,7 @@ VALID_EVENT_TYPES = ["view", "cart", "remove_from_cart", "purchase"]
 
 SILVER_COLUMNS = [
     "source_event_id",
+    "event_fingerprint",
     "event_ts",
     "event_date",
     "event_year",
@@ -129,6 +139,25 @@ def try_cast_column(column_name, target_type):
     return expr(f"try_cast({column_name} as {target_type})")
 
 
+def fingerprint_value(value_col):
+    return coalesce(value_col.cast("string"), lit("_null_"))
+
+
+def event_fingerprint_expr():
+    event_parts = [
+        coalesce(date_format(col("event_ts"), "yyyy-MM-dd HH:mm:ss"), lit("_null_")),
+        fingerprint_value(col("event_type")),
+        fingerprint_value(col("product_id")),
+        fingerprint_value(col("category_id")),
+        fingerprint_value(col("category_code")),
+        fingerprint_value(col("brand")),
+        fingerprint_value(col("price")),
+        fingerprint_value(col("user_id")),
+        fingerprint_value(col("user_session")),
+    ]
+    return sha2(concat_ws("||", *event_parts), 256)
+
+
 def build_silver_dataframe(bronze_df):
     event_time_clean = regexp_replace(col("event_time"), r"\s+UTC$", "")
     event_ts_col = try_to_timestamp(
@@ -163,11 +192,17 @@ def build_silver_dataframe(bronze_df):
         .withColumn("event_month", month(col("event_ts")))
         .withColumn("event_day", dayofmonth(col("event_ts")))
         .withColumn("event_hour", hour(col("event_ts")))
-        # Spark 4 ANSI mode fails on array[index] when the index is missing.
-        # SQL get(array, index) is 0-based and returns NULL for out-of-range.
-        .withColumn("category_l1", expr(r"get(split(category_code, '\\.'), 0)"))
-        .withColumn("category_l2", expr(r"get(split(category_code, '\\.'), 1)"))
-        .withColumn("category_l3", expr(r"get(split(category_code, '\\.'), 2)"))
+        .withColumn("category_parts", split(col("category_code"), r"\."))
+        .withColumn("category_l1", expr("get(category_parts, 0)"))
+        .withColumn("category_l2", expr("get(category_parts, 1)"))
+        .withColumn(
+            "category_l3",
+            when(
+                size(col("category_parts")) > 2,
+                concat_ws(".", slice(col("category_parts"), 3, size(col("category_parts")) - 2))
+            ).otherwise(lit(None).cast("string"))
+        )
+        .drop("category_parts")
         .withColumn(
             "source_event_id",
             concat_ws(
@@ -176,8 +211,9 @@ def build_silver_dataframe(bronze_df):
                 col("kafka_offset").cast("string"),
             ),
         )
+        .withColumn("event_fingerprint", event_fingerprint_expr())
     )
-
+    
     missing_event_ts = col("event_ts").isNull()
     invalid_event_type = (
         col("event_type").isNull() | (~col("event_type").isin(VALID_EVENT_TYPES))
@@ -223,11 +259,13 @@ def build_silver_dataframe(bronze_df):
 
 
 def deduplicate_valid_events(valid_df):
-    # Keep one record per Kafka partition/offset. If duplicates exist in this
-    # batch, the latest processed row wins; kafka_ts is only a deterministic tie.
-    window = Window.partitionBy("source_event_id").orderBy(
-        col("silver_processed_at").desc(),
+    # Keep one record per business event content. Kafka metadata is only used
+    # as a tie-breaker when the same event appears more than once.
+    window = Window.partitionBy("event_fingerprint").orderBy(
+        col("bronze_ingested_at").desc_nulls_last(),
         col("kafka_ts").desc_nulls_last(),
+        col("kafka_partition").desc_nulls_last(),
+        col("kafka_offset").desc_nulls_last(),
     )
     return (
         valid_df
@@ -237,20 +275,26 @@ def deduplicate_valid_events(valid_df):
     )
 
 
-def read_existing_source_event_ids(spark, path):
+def read_existing_event_fingerprints(spark, path):
     if not path_exists(spark, path):
         log(f"No existing output found at {path}.")
         return None
 
     try:
-        return (
-            spark.read.parquet(path)
-            .select("source_event_id")
-            .where(col("source_event_id").isNotNull())
-            .distinct()
-        )
+        existing_df = spark.read.option("mergeSchema", "true").parquet(path)
+
+        if "event_fingerprint" not in existing_df.columns:
+            log("Existing output has no event_fingerprint; computing it from existing rows.")
+            existing_df = existing_df.withColumn(
+                "event_fingerprint",
+                event_fingerprint_expr(),
+            )
+
+        return existing_df.select("event_fingerprint").where(
+            col("event_fingerprint").isNotNull()
+        ).distinct()
     except AnalysisException as exc:
-        log(f"Cannot read existing output ids at {path}.")
+        log(f"Cannot read existing event_fingerprints at {path}.")
         log(f"Spark message: {exc}")
         return None
 
@@ -280,25 +324,28 @@ def write_outputs(silver_df, config):
     valid_output_df = valid_dedup_df
     valid_output_count = valid_dedup_count
     skipped_existing_count = 0
-    existing_valid_ids = None
+    existing_fingerprints = None
 
     if write_mode == "append":
-        existing_valid_ids = read_existing_source_event_ids(spark, config.valid_output_path)
-        if existing_valid_ids is not None:
-            existing_valid_ids.cache()
-            existing_valid_ids.count()
+        existing_fingerprints = read_existing_event_fingerprints(
+            spark,
+            config.valid_output_path,
+        )
+        if existing_fingerprints is not None:
+            existing_fingerprints.cache()
+            existing_fingerprints.count()
             valid_output_df = valid_dedup_df.join(
-                existing_valid_ids,
-                on="source_event_id",
+                existing_fingerprints,
+                on="event_fingerprint",
                 how="left_anti",
-            ).cache()
+            ).select(*SILVER_COLUMNS).cache()
             valid_output_count = valid_output_df.count()
             skipped_existing_count = valid_dedup_count - valid_output_count
 
     log(f"Valid rows before dedup : {valid_count}")
     log(f"Invalid rows            : {invalid_count}")
     log(f"Valid rows after dedup  : {valid_dedup_count}")
-    log(f"Valid rows already exist : {skipped_existing_count}")
+    log(f"Valid duplicate fingerprints skipped : {skipped_existing_count}")
     log(f"Valid rows to write      : {valid_output_count}")
     log(f"Write mode              : {write_mode}")
     log("Output schema:")
@@ -320,8 +367,8 @@ def write_outputs(silver_df, config):
         .parquet(config.invalid_output_path)
     )
 
-    if existing_valid_ids is not None:
-        existing_valid_ids.unpersist()
+    if existing_fingerprints is not None:
+        existing_fingerprints.unpersist()
     if valid_output_df is not valid_dedup_df:
         valid_output_df.unpersist()
     valid_dedup_df.unpersist()
