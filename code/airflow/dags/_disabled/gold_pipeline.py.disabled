@@ -1,7 +1,0 @@
-"""
-Gold DAG is intentionally disabled.
-
-Current active Spark layer only keeps Bronze and Silver. Gold/Iceberg will be
-rebuilt later with its own clear config instead of reusing the old mixed helper
-functions.
-"""

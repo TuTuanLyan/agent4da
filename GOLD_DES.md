@@ -48,6 +48,7 @@ dim_user [icon: user, color: blue] {
   total_events bigint
   total_views bigint
   total_cart_adds bigint
+  total_remove_from_carts bigint
   total_purchases bigint
   total_revenue decimal
 
@@ -75,6 +76,7 @@ dim_session [icon: users, color: blue] {
 
 fact_events [icon: activity, color: orange] {
   event_id string pk
+  event_fingerprint string unique
   source_event_id string
 
   time_id string fk
@@ -95,6 +97,7 @@ fact_events [icon: activity, color: orange] {
 
   kafka_partition int
   kafka_offset bigint
+  kafka_ts timestamp
 
   silver_processed_at timestamp
   gold_processed_at timestamp
@@ -102,6 +105,7 @@ fact_events [icon: activity, color: orange] {
 
 fact_sales [icon: shopping-cart, color: red] {
   sale_id string pk
+  event_fingerprint string unique
   source_event_id string
 
   time_id string fk
@@ -131,6 +135,7 @@ daily_event_summary [icon: bar-chart-2, color: yellow] {
   unique_users bigint
   unique_sessions bigint
   unique_products bigint
+  unique_events bigint
 
   total_revenue decimal
   avg_event_price decimal
@@ -157,6 +162,7 @@ daily_product_summary [icon: trending-up, color: yellow] {
   purchase_count bigint
   remove_from_cart_count bigint
 
+  unique_events bigint
   unique_users bigint
   unique_sessions bigint
 
@@ -167,6 +173,7 @@ daily_product_summary [icon: trending-up, color: yellow] {
   max_price decimal
 
   conversion_rate double
+  cart_to_purchase_rate double
 
   gold_processed_at timestamp
 }
@@ -184,12 +191,15 @@ daily_category_summary [icon: layers, color: yellow] {
   view_count bigint
   cart_count bigint
   purchase_count bigint
+  remove_from_cart_count bigint
 
+  unique_events bigint
   unique_users bigint
   unique_products bigint
 
   revenue decimal
   conversion_rate double
+  cart_to_purchase_rate double
 
   gold_processed_at timestamp
 }
@@ -203,12 +213,15 @@ daily_brand_summary [icon: tag, color: yellow] {
   view_count bigint
   cart_count bigint
   purchase_count bigint
+  remove_from_cart_count bigint
 
+  unique_events bigint
   unique_users bigint
   unique_products bigint
 
   revenue decimal
   conversion_rate double
+  cart_to_purchase_rate double
 
   gold_processed_at timestamp
 }
@@ -222,6 +235,7 @@ metadata_table_catalog [icon: database, color: gray] {
   description string
   grain string
   primary_key string
+  unique_key string
 
   storage_format string
   query_engine string
@@ -255,6 +269,7 @@ metadata_column_catalog [icon: columns, color: gray] {
   is_metric boolean
   is_time_column boolean
   is_join_key boolean
+  is_unique_key boolean
 
   example_values string
   allowed_values string
@@ -298,6 +313,7 @@ fact_sales.time_id > dim_time.time_id
 fact_sales.product_id > dim_product.product_id
 fact_sales.user_id > dim_user.user_id
 fact_sales.session_id > dim_session.session_id
+fact_sales.event_fingerprint > fact_events.event_fingerprint
 
 dim_session.user_id > dim_user.user_id
 
