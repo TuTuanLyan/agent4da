@@ -3,7 +3,7 @@
 # ==============================
 
 # Danh sách service
-SERVICES := kafka spark minio postgre airflow
+SERVICES := kafka spark minio postgre airflow trino
 
 # Tên file compose
 COMPOSE_kafka    := docker-compose.kafka.yml
@@ -11,6 +11,7 @@ COMPOSE_spark    := docker-compose.spark.yml
 COMPOSE_minio    := docker-compose.minio.yml
 COMPOSE_postgre := docker-compose.postgre.yml
 COMPOSE_airflow := docker-compose.airflow.yml
+COMPOSE_trino    := docker-compose.trino.yml
 
 # ==============================
 # Helper macro
@@ -99,6 +100,7 @@ help:
 	@echo "  make minio-up"
 	@echo "  make postgre-up"
 	@echo "  make airflow-up"
+	@echo "  make trino-up"
 	@echo ""
 	@echo "  make all-up"
 	@echo "  make all-down"

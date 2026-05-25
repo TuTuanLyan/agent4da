@@ -1,4 +1,17 @@
-from code.agent.services.trino_helper import execute_query_to_dicts
+import os
+from services.trino_service import execute_query_to_dicts, connect_to_trino
+
+host = os.getenv("TRINO_HOST", "localhost")
+port = int(os.getenv("TRINO_PORT", "8082"))
+user = os.getenv("TRINO_USER", "agent4da")
+
+connection = connect_to_trino(
+    host=host,
+    port=port,
+    user=user,
+    catalog="iceberg",
+    schema="metadata"
+)
 
 def load_metadata(connection):
     tables = execute_query_to_dicts(
@@ -37,8 +50,6 @@ def load_metadata(connection):
     )
     return {"tables": tables, "columns": columns, "metrics": metrics, "joins": joins}
 
-from helpers.metadata_formatter import build_schema_context
-
 def build_schema_context(metadata):
 
     tables = metadata["tables"]
@@ -69,7 +80,7 @@ def build_schema_context(metadata):
     return "\n".join(lines)
 
 def load_metadata_node(state):
-    metadata = load_metadata()
+    metadata = load_metadata(connection)
 
     schema_context = build_schema_context(metadata)
 
