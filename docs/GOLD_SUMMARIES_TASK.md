@@ -12,8 +12,8 @@ iceberg_catalog.gold.dim_product
 ```
 
 Task khong doc Bronze, khong doc Silver va khong doc staging neu khong can.
-Day van la ban test/debug: table name giu semantic that, nhung physical data nam
-trong bucket `test` cua MinIO.
+Table name giu semantic that, physical data mac dinh nam trong bucket `gold` cua
+MinIO. Neu can test/debug bang bucket khac, xem `docs/CONVERT_BUCKET.md`.
 
 ## 2. Vi sao summaries chay sau dimensions
 
@@ -63,16 +63,16 @@ iceberg_catalog.gold.dim_product
 
 ```text
 iceberg_catalog.gold.daily_event_summary
-s3a://test/gold/daily_event_summary
+s3a://gold/gold/daily_event_summary
 
 iceberg_catalog.gold.daily_product_summary
-s3a://test/gold/daily_product_summary
+s3a://gold/gold/daily_product_summary
 
 iceberg_catalog.gold.daily_category_summary
-s3a://test/gold/daily_category_summary
+s3a://gold/gold/daily_category_summary
 
 iceberg_catalog.gold.daily_brand_summary
-s3a://test/gold/daily_brand_summary
+s3a://gold/gold/daily_brand_summary
 ```
 
 ## 7. Logic tung summary
@@ -136,7 +136,7 @@ Boolean flags duoc cast qua integer khi sum. Revenue luon aggregate tu
 PostgreSQL JDBC Catalog chi ghi Iceberg metadata nhu namespace, table metadata,
 snapshot/catalog pointer. PostgreSQL khong chua full summary rows.
 
-Summary rows that nam trong data files tren MinIO bucket `test`. Co the xem
+Summary rows that nam trong data files tren MinIO bucket `gold`. Co the xem
 Iceberg metadata qua Spark metadata tables nhu `.snapshots` va `.files` neu ho tro.
 
 ## 10. JAR/dependency

@@ -3,7 +3,8 @@
 ## 1. Muc tieu task
 
 Stage 2 Gold build `fact_events` va `fact_sales` tu
-`stg_events`. Day la ban test/debug tren bucket `test` cua MinIO, chua ghi
+`stg_events`. Mac dinh hien tai ghi tren bucket `gold` cua MinIO; co the doi
+ve bucket test/debug bang env trong `docs/CONVERT_BUCKET.md`.
 vao Gold production.
 
 ## 2. File da tao/chinh sua
@@ -11,10 +12,10 @@ vao Gold production.
 - `code/spark/gold/tasks/gold_build_facts.py`: PySpark script doc lap doc
   staging Iceberg table, build fact_events/fact_sales, validate checks va full
   refresh vao Iceberg test tables.
-- `code/airflow/dags/gold_pipeline.py`: DAG manual trigger cho Gold test, gom
+- `code/airflow/dags/gold_pipeline.py`: DAG manual trigger cho Gold, gom
   chain `gold_prepare_events >> gold_build_facts >> gold_build_dimensions`.
 - `docs/GOLD_FACTS_TASK.md`: tai lieu Stage 2 facts.
-- `notebook/gold_view.ipynb`: bo sung/cap nhat cell xem Gold test staging/facts
+- `notebook/gold_view.ipynb`: bo sung/cap nhat cell xem Gold staging/facts
   bang Spark/Iceberg catalog va jar local.
 
 ## 3. Input
@@ -28,7 +29,7 @@ iceberg_catalog.gold_staging.stg_events
 Physical path staging:
 
 ```text
-s3a://test/gold_staging/stg_events
+s3a://gold/gold_staging/stg_events
 ```
 
 Task fact chi doc tu Iceberg staging table, khong doc truc tiep Silver. Neu
@@ -141,14 +142,14 @@ Required check: `fact_sales` count phai bang count cua `fact_events` voi
 
 ```text
 iceberg_catalog.gold.fact_events
-s3a://test/gold/fact_events
+s3a://gold/gold/fact_events
 ```
 
 `fact_sales`:
 
 ```text
 iceberg_catalog.gold.fact_sales
-s3a://test/gold/fact_sales
+s3a://gold/gold/fact_sales
 ```
 
 Tables duoc tao bang `CREATE TABLE IF NOT EXISTS ... USING iceberg LOCATION ...`
@@ -161,11 +162,11 @@ PostgreSQL JDBC Catalog chi ghi metadata cua Iceberg table, vi du namespace,
 table metadata, snapshot va catalog pointer tuy Iceberg implementation.
 PostgreSQL khong chua full rows cua `fact_events` hoac `fact_sales`.
 
-Real row data nam trong data files tren MinIO bucket `test`:
+Real row data nam trong data files tren MinIO bucket `gold`:
 
 ```text
-s3a://test/gold/fact_events
-s3a://test/gold/fact_sales
+s3a://gold/gold/fact_events
+s3a://gold/gold/fact_sales
 ```
 
 Cach phan biet:
@@ -215,7 +216,7 @@ Staging:
   --catalog-name iceberg_catalog \
   --namespace gold_staging \
   --output-table stg_events \
-  --output-path s3a://test/gold_staging/stg_events \
+  --output-path s3a://gold/gold_staging/stg_events \
   --refresh-mode full_refresh
 ```
 
@@ -233,8 +234,8 @@ Facts:
   --target-namespace gold \
   --fact-events-table fact_events \
   --fact-sales-table fact_sales \
-  --fact-events-path s3a://test/gold/fact_events \
-  --fact-sales-path s3a://test/gold/fact_sales \
+  --fact-events-path s3a://gold/gold/fact_events \
+  --fact-sales-path s3a://gold/gold/fact_sales \
   --refresh-mode full_refresh
 ```
 

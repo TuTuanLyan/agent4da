@@ -22,8 +22,9 @@ Metadata pipeline khong duoc noi vao `gold_pipeline` trong stage nay.
 ## 3. Hard-code vs metadata tables
 
 Con nguoi van dinh nghia y nghia nghiep vu trong code, tap trung tai
-`code/spark/gold/metadata.py`. Metadata pipeline publish cac dinh nghia do thanh
-Iceberg tables co the query duoc.
+`code/spark/gold/metadata_definitions.py`. `code/spark/gold/metadata.py` chi con
+logic build/validate ngan gon, con output schema nam trong
+`code/spark/gold/metadata_schema.py`.
 
 Agent, backend hoac notebook co the query metadata tables thay vi doc code. Pipeline
 con validate metadata voi schema that cua Gold tables de bat loi rename/xoa cot,
@@ -31,9 +32,12 @@ metric base table sai, hoac join key khong ton tai.
 
 ## 4. File da tao/chinh sua
 
-- `code/spark/gold/config.py`: them constants metadata namespace/base path/table names.
-- `code/spark/gold/metadata.py`: dinh nghia semantic metadata, build DataFrame,
-  tao/ghi Iceberg metadata tables, va validation.
+- `code/spark/gold/config.py`: constants metadata namespace/base path/table names.
+- `code/spark/gold/metadata_definitions.py`: dinh nghia business metadata cho table,
+  column, metric va join.
+- `code/spark/gold/metadata_schema.py`: schema cua cac metadata output tables.
+- `code/spark/gold/metadata.py`: build DataFrame, tao/ghi Iceberg metadata tables,
+  va validation.
 - `code/spark/gold/tasks/gold_build_metadata.py`: Spark task build metadata.
 - `code/spark/gold/tasks/gold_validate_metadata.py`: Spark task validate metadata.
 - `code/airflow/dags/gold_metadata_pipeline.py`: DAG manual trigger rieng.
@@ -54,10 +58,10 @@ iceberg_catalog.metadata.join_catalog
 Physical locations:
 
 ```text
-s3a://test/metadata/table_catalog
-s3a://test/metadata/column_catalog
-s3a://test/metadata/metric_catalog
-s3a://test/metadata/join_catalog
+s3a://gold/metadata/table_catalog
+s3a://gold/metadata/column_catalog
+s3a://gold/metadata/metric_catalog
+s3a://gold/metadata/join_catalog
 ```
 
 Namespace duoc tao bang:
@@ -68,6 +72,11 @@ CREATE NAMESPACE IF NOT EXISTS iceberg_catalog.metadata
 
 Moi metadata table duoc tao `USING iceberg` voi explicit `LOCATION` ben tren.
 Metadata tables khong partition.
+
+Muon doi bucket/base path cho metadata, uu tien set
+`GOLD_METADATA_BASE_PATH=s3a://<bucket>/metadata`. Neu muon doi ca Gold layer,
+set `MINIO_BUCKET_GOLD` hoac `GOLD_STORAGE_ROOT`; chi tiet xem
+`docs/CONVERT_BUCKET.md`.
 
 ## 6. Noi dung tung bang
 
@@ -151,7 +160,7 @@ Build metadata:
   --metadata-namespace metadata \
   --gold-namespace gold \
   --staging-namespace gold_staging \
-  --metadata-base-path s3a://test/metadata \
+  --metadata-base-path s3a://gold/metadata \
   --refresh-mode full_refresh
 ```
 

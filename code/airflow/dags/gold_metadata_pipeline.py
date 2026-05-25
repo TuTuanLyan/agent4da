@@ -23,15 +23,21 @@ ICEBERG_JDBC_URI = env("ICEBERG_JDBC_URI", "jdbc:postgresql://postgres-db:5432/a
 ICEBERG_JDBC_SCHEMA = env("ICEBERG_JDBC_SCHEMA", "iceberg")
 ICEBERG_JDBC_USER = require_env("ICEBERG_JDBC_USER")
 ICEBERG_JDBC_PASSWORD = require_env("ICEBERG_JDBC_PASSWORD")
+GOLD_BUCKET = env("MINIO_BUCKET_GOLD", "gold")
+GOLD_STORAGE_ROOT = env("GOLD_STORAGE_ROOT", f"s3a://{GOLD_BUCKET}").rstrip("/")
+DEFAULT_METADATA_BASE_PATH = f"{GOLD_STORAGE_ROOT}/metadata"
+METADATA_BASE_PATH = env(
+    "GOLD_METADATA_BASE_PATH",
+    env("METADATA_BASE_PATH", DEFAULT_METADATA_BASE_PATH),
+).rstrip("/")
 METADATA_WAREHOUSE = env(
     "GOLD_METADATA_ICEBERG_WAREHOUSE",
-    "s3a://test/metadata/warehouse",
+    f"{METADATA_BASE_PATH}/warehouse",
 )
 
 STAGING_NAMESPACE = env("GOLD_STAGING_NAMESPACE", "gold_staging")
 GOLD_NAMESPACE = env("GOLD_NAMESPACE", "gold")
 METADATA_NAMESPACE = env("METADATA_NAMESPACE", "metadata")
-METADATA_BASE_PATH = env("METADATA_BASE_PATH", "s3a://test/metadata")
 REFRESH_MODE = env("GOLD_METADATA_REFRESH_MODE", "full_refresh")
 
 GOLD_JARS = [
@@ -86,6 +92,9 @@ def metadata_spark_conf(warehouse):
             "spark.executorEnv.ICEBERG_JDBC_SCHEMA": ICEBERG_JDBC_SCHEMA,
             "spark.executorEnv.GOLD_METADATA_ICEBERG_WAREHOUSE": warehouse,
             "spark.executorEnv.GOLD_ICEBERG_WAREHOUSE": warehouse,
+            "spark.executorEnv.MINIO_BUCKET_GOLD": GOLD_BUCKET,
+            "spark.executorEnv.GOLD_STORAGE_ROOT": GOLD_STORAGE_ROOT,
+            "spark.executorEnv.GOLD_METADATA_BASE_PATH": METADATA_BASE_PATH,
         }
     )
     return conf
@@ -103,6 +112,9 @@ def metadata_env_vars(warehouse):
         "ICEBERG_JDBC_SCHEMA": ICEBERG_JDBC_SCHEMA,
         "GOLD_METADATA_ICEBERG_WAREHOUSE": warehouse,
         "GOLD_ICEBERG_WAREHOUSE": warehouse,
+        "MINIO_BUCKET_GOLD": GOLD_BUCKET,
+        "GOLD_STORAGE_ROOT": GOLD_STORAGE_ROOT,
+        "GOLD_METADATA_BASE_PATH": METADATA_BASE_PATH,
     }
 
 

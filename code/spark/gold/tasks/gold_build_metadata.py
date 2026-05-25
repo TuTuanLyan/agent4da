@@ -13,11 +13,11 @@ from gold import metadata
 from gold.config import (
     DEFAULT_CATALOG,
     DEFAULT_GOLD_NAMESPACE,
+    DEFAULT_METADATA_BASE_PATH,
     DEFAULT_METADATA_NAMESPACE,
     DEFAULT_METADATA_WAREHOUSE,
     DEFAULT_REFRESH_MODE,
     DEFAULT_STAGING_NAMESPACE,
-    DEFAULT_TEST_METADATA_BASE_PATH,
     create_spark_session,
     load_runtime_config,
 )
@@ -38,7 +38,7 @@ def parse_args(argv=None):
     parser.add_argument("--metadata-namespace", default=DEFAULT_METADATA_NAMESPACE)
     parser.add_argument("--gold-namespace", default=DEFAULT_GOLD_NAMESPACE)
     parser.add_argument("--staging-namespace", default=DEFAULT_STAGING_NAMESPACE)
-    parser.add_argument("--metadata-base-path", default=DEFAULT_TEST_METADATA_BASE_PATH)
+    parser.add_argument("--metadata-base-path", default=DEFAULT_METADATA_BASE_PATH)
     parser.add_argument("--refresh-mode", default=DEFAULT_REFRESH_MODE)
     return parser.parse_args(argv)
 

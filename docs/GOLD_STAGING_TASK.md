@@ -2,14 +2,14 @@
 
 ## 1. Muc tieu task
 
-Stage 1 cua Gold Layer tao staging table tu Silver valid events de test/debug
+Stage 1 cua Gold Layer tao staging table tu Silver valid events de build Gold
 truoc. Day chua phai Gold production, chua build fact/dim/summary va chua
 trigger Airflow DAG.
 
-Task moi ghi vao Iceberg table test tren MinIO bucket `test`, mac dinh tai:
+Task moi ghi vao Iceberg table tren MinIO bucket `gold`, mac dinh tai:
 
 ```text
-s3a://test/gold_staging/stg_events
+s3a://gold/gold_staging/stg_events
 ```
 
 ## 2. File da tao/chinh sua
@@ -75,7 +75,7 @@ iceberg_catalog.gold_staging.stg_events
 Physical location mac dinh:
 
 ```text
-s3a://test/gold_staging/stg_events
+s3a://gold/gold_staging/stg_events
 ```
 
 Output schema:
@@ -112,7 +112,7 @@ Table duoc tao bang Spark SQL:
 
 - `CREATE NAMESPACE IF NOT EXISTS iceberg_catalog.gold_staging`
 - `CREATE TABLE IF NOT EXISTS ... USING iceberg`
-- `LOCATION 's3a://test/gold_staging/stg_events'`
+- `LOCATION 's3a://gold/gold_staging/stg_events'`
 - `PARTITIONED BY (event_date)`
 - `TBLPROPERTIES ('format-version'='2')`
 
@@ -122,7 +122,7 @@ PostgreSQL JDBC Catalog chi luu Iceberg metadata/catalog information, vi du:
 namespace, table pointer, snapshot/catalog metadata. PostgreSQL khong luu full
 event rows.
 
-Event rows nam trong data files tren MinIO tai `s3a://test/gold_staging/stg_events`
+Event rows nam trong data files tren MinIO tai `s3a://gold/gold_staging/stg_events`
 hoac `--output-path` duoc truyen vao. Metadata duoc tao/cap nhat khi Spark chay:
 
 - `CREATE NAMESPACE`
@@ -157,7 +157,7 @@ trong `/opt/project/jars`; khong tai lai jar moi lan chay job.
   --catalog-name iceberg_catalog \
   --namespace gold_staging \
   --output-table stg_events \
-  --output-path s3a://test/gold_staging/stg_events \
+  --output-path s3a://gold/gold_staging/stg_events \
   --refresh-mode full_refresh
 ```
 
@@ -174,8 +174,7 @@ ICEBERG_JDBC_SCHEMA
 ```
 
 `GOLD_STAGING_ICEBERG_WAREHOUSE` co the duoc set neu muon override warehouse
-staging. Neu khong set, script dung `s3a://test/gold_staging/warehouse/` de tranh
-dung bucket Gold production.
+staging. Neu khong set, script dung `s3a://gold/gold_staging/warehouse/`.
 
 ## 9. Xem data bang code/notebook
 

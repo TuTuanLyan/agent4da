@@ -28,20 +28,20 @@ iceberg_catalog.gold.daily_brand_summary
 
 ## 3. Physical location hien tai
 
-Du ten bang da theo production-style, data vat ly van nam trong bucket test:
+Du ten bang da theo production-style, data vat ly mac dinh nam trong bucket gold:
 
 ```text
-s3a://test/gold_staging/stg_events
-s3a://test/gold/fact_events
-s3a://test/gold/fact_sales
-s3a://test/gold/dim_time
-s3a://test/gold/dim_product
-s3a://test/gold/dim_user
-s3a://test/gold/dim_session
-s3a://test/gold/daily_event_summary
-s3a://test/gold/daily_product_summary
-s3a://test/gold/daily_category_summary
-s3a://test/gold/daily_brand_summary
+s3a://gold/gold_staging/stg_events
+s3a://gold/gold/fact_events
+s3a://gold/gold/fact_sales
+s3a://gold/gold/dim_time
+s3a://gold/gold/dim_product
+s3a://gold/gold/dim_user
+s3a://gold/gold/dim_session
+s3a://gold/gold/daily_event_summary
+s3a://gold/gold/daily_product_summary
+s3a://gold/gold/daily_category_summary
+s3a://gold/gold/daily_brand_summary
 ```
 
 ## 4. File da tao/chinh sua
@@ -70,7 +70,7 @@ s3a://test/gold/daily_brand_summary
 ## 5. Helper dung chung
 
 - `identifiers.py`: chan identifier rong/ky tu nguy hiem, tao full table name,
-  assert location test phai nam duoi `s3a://test/`.
+  assert location phai nam duoi configured Gold prefixes.
 - `validators.py`: check required columns, non-null key, unique key, required table,
   count equality.
 - `ddl.py`: tao namespace/table Iceberg voi location da validate.
@@ -160,7 +160,7 @@ Staging:
   --catalog-name iceberg_catalog \
   --namespace gold_staging \
   --output-table stg_events \
-  --output-path s3a://test/gold_staging/stg_events \
+  --output-path s3a://gold/gold_staging/stg_events \
   --refresh-mode full_refresh
 ```
 
@@ -179,8 +179,8 @@ Facts:
   --target-namespace gold \
   --fact-events-table fact_events \
   --fact-sales-table fact_sales \
-  --fact-events-path s3a://test/gold/fact_events \
-  --fact-sales-path s3a://test/gold/fact_sales \
+  --fact-events-path s3a://gold/gold/fact_events \
+  --fact-sales-path s3a://gold/gold/fact_sales \
   --refresh-mode full_refresh
 ```
 
@@ -254,7 +254,7 @@ SELECT * FROM iceberg_catalog.gold.fact_events.files
 
 PostgreSQL JDBC catalog chi luu Iceberg metadata nhu namespace, table metadata,
 snapshot/catalog pointer. PostgreSQL khong chua full event rows. Real data files
-nam trong MinIO bucket `test`.
+nam trong MinIO bucket `gold`.
 
 ## 11. Troubleshooting catalog pointer cu
 
@@ -267,18 +267,18 @@ voi loi dang:
 FileNotFoundException: s3a://gold/warehouse/gold/fact_events/metadata/...metadata.json
 ```
 
-`ddl.py` hien co guard cho test full-refresh:
+`ddl.py` hien co guard cho configured Gold full-refresh:
 
-- Location dau vao cua table phai nam duoi `s3a://test/`.
+- Location dau vao cua table phai nam duoi configured allowed prefixes.
 - Truoc khi create table, task doc row trong JDBC catalog `iceberg.iceberg_tables`.
-  Neu row hien tai cua dung table dang tro ra ngoai `s3a://test/`, task xoa catalog
-  entry do de tao lai table test tai location moi.
+  Neu row hien tai cua dung table dang tro ra ngoai allowed prefixes, task xoa catalog
+  entry do de tao lai table tai location moi.
 - Neu Iceberg catalog pointer bi broken vi metadata file khong con ton tai, task se
   xoa truc tiep row catalog stale trong `iceberg.iceberg_tables`, sau do recreate
-  table tai test location. Dung direct JDBC cleanup vi Spark SQL `DROP TABLE` cung
+  table tai configured location. Dung direct JDBC cleanup vi Spark SQL `DROP TABLE` cung
   co the fail khi metadata pointer da gay.
 - Sau khi create, task doc location that cua table va fail neu location khong nam
-  duoi `s3a://test/`. Diem nay giup tranh viec vo tinh ghi vao `s3a://gold/...`.
+  duoi allowed prefixes. Diem nay giup tranh viec vo tinh ghi vao bucket khac.
 
 Neu automatic drop cung fail, can clean/drop catalog entry stale trong Iceberg JDBC
 catalog roi chay lai DAG. PostgreSQL van chi la catalog metadata, khong phai noi
