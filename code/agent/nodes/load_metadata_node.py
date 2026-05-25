@@ -1,19 +1,8 @@
-import os
-from services.trino_service import execute_query_to_dicts, connect_to_trino
+from services.trino_service import execute_query_to_dicts, get_trino_connection
 
-host = os.getenv("TRINO_HOST", "localhost")
-port = int(os.getenv("TRINO_PORT", "8082"))
-user = os.getenv("TRINO_USER", "agent4da")
 
-connection = connect_to_trino(
-    host=host,
-    port=port,
-    user=user,
-    catalog="iceberg",
-    schema="metadata"
-)
-
-def load_metadata(connection):
+def load_metadata(connection=None):
+    connection = connection or get_trino_connection()
     tables = execute_query_to_dicts(
         connection,
         """
@@ -50,40 +39,11 @@ def load_metadata(connection):
     )
     return {"tables": tables, "columns": columns, "metrics": metrics, "joins": joins}
 
-def build_schema_context(metadata):
-
-    tables = metadata["tables"]
-    columns = metadata["columns"]
-
-    lines = []
-
-    for table in tables:
-
-        table_name = table["table_name"]
-
-        lines.append(f"Table: {table_name}")
-        lines.append(f"Purpose: {table['description']}")
-        lines.append(f"Grain: {table['grain']}")
-
-        table_columns = [
-            c["column_name"]
-            for c in columns
-            if c["table_name"] == table_name
-        ]
-
-        lines.append(
-            "Columns: " + ", ".join(table_columns[:15])
-        )
-
-        lines.append("")
-
-    return "\n".join(lines)
 
 def load_metadata_node(state):
-    metadata = load_metadata(connection)
-
-    schema_context = build_schema_context(metadata)
+    if state.get("full_metadata"):
+        return {}
 
     return {
-        "metadata_context": schema_context
+        "full_metadata": load_metadata()
     }

@@ -1,15 +1,17 @@
-from typing import TypedDict, Optional, List, Dict, Any
+from typing import TypedDict, Optional
 
+class AgentState(TypedDict, total=False):
 
-class AgentState(TypedDict):
     user_question: str
 
-    metadata_context: str
+    full_metadata: dict
+
+    filtered_metadata: dict
 
     prompt: str
 
     generated_sql: str
 
-    query_result: Optional[List[Dict[str, Any]]]
+    query_result: Optional[list]
 
     error: Optional[str]

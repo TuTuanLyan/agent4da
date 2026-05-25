@@ -1,19 +1,4 @@
-
-import os
-from services.trino_service import connect_to_trino
-from services.trino_service import execute_query_to_dicts
-
-host = os.getenv("TRINO_HOST", "localhost")
-port = int(os.getenv("TRINO_PORT", "8082"))
-user = os.getenv("TRINO_USER", "agent4da")
-
-connection = connect_to_trino(
-    host=host,
-    port=port,
-    user=user,
-    catalog="iceberg",
-    schema="metadata"
-)
+from services.trino_service import execute_query_to_dicts, get_trino_connection
 
 def execute_sql_node(state):
 
@@ -21,7 +6,7 @@ def execute_sql_node(state):
         return state
 
     result = execute_query_to_dicts(
-        connection,
+        get_trino_connection(),
         state["generated_sql"]
     )
 
