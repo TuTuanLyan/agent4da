@@ -134,16 +134,18 @@ def _delete_jdbc_catalog_entry(spark, catalog, namespace, table, reason):
         conn.close()
 
 
-def _remove_catalog_entry_if_not_test_location(spark, full_table_name):
+def _remove_catalog_entry_if_location_is_not_allowed(spark, full_table_name):
     catalog, namespace, table = _split_table_identifier(full_table_name)
     metadata_location = _read_jdbc_metadata_location(spark, catalog, namespace, table)
     if metadata_location is None or _is_allowed_location(metadata_location):
         return
 
+    allowed = ", ".join(DEFAULT_ALLOWED_LOCATION_PREFIXES)
     print(
         "[GoldDDL] Existing JDBC catalog entry for "
-        f"{full_table_name} points outside test bucket: {metadata_location}. "
-        "Removing it so this test pipeline can recreate the table under s3a://test/.",
+        f"{full_table_name} points outside allowed Gold locations: "
+        f"{metadata_location}. Removing it so this pipeline can recreate the "
+        f"table under one of: {allowed}.",
         flush=True,
     )
     _delete_jdbc_catalog_entry(
@@ -151,7 +153,7 @@ def _remove_catalog_entry_if_not_test_location(spark, full_table_name):
         catalog,
         namespace,
         table,
-        "existing metadata_location is outside allowed test prefixes",
+        "existing metadata_location is outside allowed Gold location prefixes",
     )
 
 
@@ -210,7 +212,7 @@ def create_iceberg_table_if_not_exists(
     partition_clause=None,
 ):
     assert_safe_table_location(location, DEFAULT_ALLOWED_LOCATION_PREFIXES)
-    _remove_catalog_entry_if_not_test_location(spark, full_table_name)
+    _remove_catalog_entry_if_location_is_not_allowed(spark, full_table_name)
     create_sql = _create_iceberg_table_sql(
         full_table_name,
         schema_sql,

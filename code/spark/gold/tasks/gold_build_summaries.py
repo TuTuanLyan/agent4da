@@ -15,11 +15,12 @@ from gold.config import (
     DAILY_CATEGORY_SUMMARY,
     DAILY_EVENT_SUMMARY,
     DAILY_PRODUCT_SUMMARY,
+    DEFAULT_ALLOWED_LOCATION_PREFIXES,
     DEFAULT_CATALOG,
+    DEFAULT_GOLD_BASE_PATH,
     DEFAULT_GOLD_NAMESPACE,
     DEFAULT_GOLD_WAREHOUSE,
     DEFAULT_REFRESH_MODE,
-    DEFAULT_TEST_GOLD_BASE_PATH,
     DIM_PRODUCT,
     FACT_EVENTS,
     FACT_SALES,
@@ -58,19 +59,19 @@ def parse_args(argv=None):
     parser.add_argument("--daily-brand-summary-table", default=DAILY_BRAND_SUMMARY)
     parser.add_argument(
         "--daily-event-summary-path",
-        default=table_location(DEFAULT_TEST_GOLD_BASE_PATH, DAILY_EVENT_SUMMARY),
+        default=table_location(DEFAULT_GOLD_BASE_PATH, DAILY_EVENT_SUMMARY),
     )
     parser.add_argument(
         "--daily-product-summary-path",
-        default=table_location(DEFAULT_TEST_GOLD_BASE_PATH, DAILY_PRODUCT_SUMMARY),
+        default=table_location(DEFAULT_GOLD_BASE_PATH, DAILY_PRODUCT_SUMMARY),
     )
     parser.add_argument(
         "--daily-category-summary-path",
-        default=table_location(DEFAULT_TEST_GOLD_BASE_PATH, DAILY_CATEGORY_SUMMARY),
+        default=table_location(DEFAULT_GOLD_BASE_PATH, DAILY_CATEGORY_SUMMARY),
     )
     parser.add_argument(
         "--daily-brand-summary-path",
-        default=table_location(DEFAULT_TEST_GOLD_BASE_PATH, DAILY_BRAND_SUMMARY),
+        default=table_location(DEFAULT_GOLD_BASE_PATH, DAILY_BRAND_SUMMARY),
     )
     parser.add_argument("--summary", choices=SUMMARY_CHOICES, default="all")
     parser.add_argument("--refresh-mode", default=DEFAULT_REFRESH_MODE)
@@ -95,7 +96,7 @@ def validate_args(args):
         args.daily_category_summary_path,
         args.daily_brand_summary_path,
     ]:
-        assert_safe_table_location(path, ["s3a://test/"])
+        assert_safe_table_location(path, DEFAULT_ALLOWED_LOCATION_PREFIXES)
 
 
 def selected_summary_specs(args):

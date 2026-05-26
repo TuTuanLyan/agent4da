@@ -11,12 +11,13 @@ if SPARK_DIR not in sys.path:
 
 from gold import facts
 from gold.config import (
+    DEFAULT_ALLOWED_LOCATION_PREFIXES,
     DEFAULT_CATALOG,
+    DEFAULT_GOLD_BASE_PATH,
     DEFAULT_GOLD_NAMESPACE,
     DEFAULT_GOLD_WAREHOUSE,
     DEFAULT_REFRESH_MODE,
     DEFAULT_STAGING_NAMESPACE,
-    DEFAULT_TEST_GOLD_BASE_PATH,
     FACT_EVENTS,
     FACT_SALES,
     STG_EVENTS,
@@ -50,11 +51,11 @@ def parse_args(argv=None):
     parser.add_argument("--fact-sales-table", default=FACT_SALES)
     parser.add_argument(
         "--fact-events-path",
-        default=table_location(DEFAULT_TEST_GOLD_BASE_PATH, FACT_EVENTS),
+        default=table_location(DEFAULT_GOLD_BASE_PATH, FACT_EVENTS),
     )
     parser.add_argument(
         "--fact-sales-path",
-        default=table_location(DEFAULT_TEST_GOLD_BASE_PATH, FACT_SALES),
+        default=table_location(DEFAULT_GOLD_BASE_PATH, FACT_SALES),
     )
     parser.add_argument("--refresh-mode", default=DEFAULT_REFRESH_MODE)
     return parser.parse_args(argv)
@@ -65,8 +66,8 @@ def validate_args(args):
     table_identifier(args.catalog_name, args.staging_namespace, args.staging_table)
     table_identifier(args.catalog_name, args.target_namespace, args.fact_events_table)
     table_identifier(args.catalog_name, args.target_namespace, args.fact_sales_table)
-    assert_safe_table_location(args.fact_events_path, ["s3a://test/"])
-    assert_safe_table_location(args.fact_sales_path, ["s3a://test/"])
+    assert_safe_table_location(args.fact_events_path, DEFAULT_ALLOWED_LOCATION_PREFIXES)
+    assert_safe_table_location(args.fact_sales_path, DEFAULT_ALLOWED_LOCATION_PREFIXES)
 
 
 def run_task(spark, args):

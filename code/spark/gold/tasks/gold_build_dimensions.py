@@ -11,12 +11,13 @@ if SPARK_DIR not in sys.path:
 
 from gold import dimensions
 from gold.config import (
+    DEFAULT_ALLOWED_LOCATION_PREFIXES,
     DEFAULT_CATALOG,
+    DEFAULT_GOLD_BASE_PATH,
     DEFAULT_GOLD_NAMESPACE,
     DEFAULT_GOLD_WAREHOUSE,
     DEFAULT_REFRESH_MODE,
     DEFAULT_STAGING_NAMESPACE,
-    DEFAULT_TEST_GOLD_BASE_PATH,
     DIM_PRODUCT,
     DIM_SESSION,
     DIM_TIME,
@@ -60,19 +61,19 @@ def parse_args(argv=None):
     parser.add_argument("--dim-session-table", default=DIM_SESSION)
     parser.add_argument(
         "--dim-time-path",
-        default=table_location(DEFAULT_TEST_GOLD_BASE_PATH, DIM_TIME),
+        default=table_location(DEFAULT_GOLD_BASE_PATH, DIM_TIME),
     )
     parser.add_argument(
         "--dim-product-path",
-        default=table_location(DEFAULT_TEST_GOLD_BASE_PATH, DIM_PRODUCT),
+        default=table_location(DEFAULT_GOLD_BASE_PATH, DIM_PRODUCT),
     )
     parser.add_argument(
         "--dim-user-path",
-        default=table_location(DEFAULT_TEST_GOLD_BASE_PATH, DIM_USER),
+        default=table_location(DEFAULT_GOLD_BASE_PATH, DIM_USER),
     )
     parser.add_argument(
         "--dim-session-path",
-        default=table_location(DEFAULT_TEST_GOLD_BASE_PATH, DIM_SESSION),
+        default=table_location(DEFAULT_GOLD_BASE_PATH, DIM_SESSION),
     )
     parser.add_argument("--refresh-mode", default=DEFAULT_REFRESH_MODE)
     return parser.parse_args(argv)
@@ -96,7 +97,7 @@ def validate_args(args):
         args.dim_user_path,
         args.dim_session_path,
     ]:
-        assert_safe_table_location(path, ["s3a://test/"])
+        assert_safe_table_location(path, DEFAULT_ALLOWED_LOCATION_PREFIXES)
 
 
 def validate_dimension(df, key_column, table_name):

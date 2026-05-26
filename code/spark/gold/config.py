@@ -1,8 +1,6 @@
-"""Shared Gold test configuration and Spark/Iceberg session helpers."""
+"""Shared Gold configuration and Spark/Iceberg session helpers."""
 
 from dataclasses import dataclass
-
-from pyspark.sql import SparkSession
 
 from common.config import env, load_minio_config, require_env
 from common.s3a import apply_s3a_options
@@ -14,10 +12,36 @@ DEFAULT_CATALOG = "iceberg_catalog"
 DEFAULT_STAGING_NAMESPACE = "gold_staging"
 DEFAULT_GOLD_NAMESPACE = "gold"
 DEFAULT_METADATA_NAMESPACE = "metadata"
-DEFAULT_TEST_STAGING_BASE_PATH = "s3a://test/gold_staging"
-DEFAULT_TEST_GOLD_BASE_PATH = "s3a://test/gold"
-DEFAULT_TEST_METADATA_BASE_PATH = "s3a://test/metadata"
-DEFAULT_ALLOWED_LOCATION_PREFIXES = ["s3a://test/"]
+
+DEFAULT_GOLD_BUCKET = env("MINIO_BUCKET_GOLD", "gold")
+DEFAULT_GOLD_STORAGE_ROOT = env("GOLD_STORAGE_ROOT", f"s3a://{DEFAULT_GOLD_BUCKET}")
+DEFAULT_GOLD_STORAGE_ROOT = DEFAULT_GOLD_STORAGE_ROOT.rstrip("/")
+DEFAULT_STAGING_BASE_PATH = env(
+    "GOLD_STAGING_BASE_PATH",
+    f"{DEFAULT_GOLD_STORAGE_ROOT}/gold_staging",
+).rstrip("/")
+DEFAULT_GOLD_BASE_PATH = env(
+    "GOLD_BASE_PATH",
+    f"{DEFAULT_GOLD_STORAGE_ROOT}/gold",
+).rstrip("/")
+DEFAULT_METADATA_BASE_PATH = env(
+    "GOLD_METADATA_BASE_PATH",
+    f"{DEFAULT_GOLD_STORAGE_ROOT}/metadata",
+).rstrip("/")
+
+
+def _location_prefix(path):
+    return f"{path.rstrip('/')}/"
+
+
+DEFAULT_ALLOWED_LOCATION_PREFIXES = sorted(
+    {
+        _location_prefix(DEFAULT_GOLD_STORAGE_ROOT),
+        _location_prefix(DEFAULT_STAGING_BASE_PATH),
+        _location_prefix(DEFAULT_GOLD_BASE_PATH),
+        _location_prefix(DEFAULT_METADATA_BASE_PATH),
+    }
+)
 
 STG_EVENTS = "stg_events"
 FACT_EVENTS = "fact_events"
@@ -30,17 +54,15 @@ DAILY_EVENT_SUMMARY = "daily_event_summary"
 DAILY_PRODUCT_SUMMARY = "daily_product_summary"
 DAILY_CATEGORY_SUMMARY = "daily_category_summary"
 DAILY_BRAND_SUMMARY = "daily_brand_summary"
-TABLE_CATALOG = "table_catalog"
-COLUMN_CATALOG = "column_catalog"
-METRIC_CATALOG = "metric_catalog"
-JOIN_CATALOG = "join_catalog"
+SEMANTIC_TABLE_CATALOG = "semantic_table_catalog"
+SEMANTIC_COLUMN_CATALOG = "semantic_column_catalog"
 
 DEFAULT_REFRESH_MODE = "full_refresh"
 DEFAULT_SILVER_PATH = "s3a://silver/ecommerce_events/"
 
-DEFAULT_STAGING_WAREHOUSE = f"{DEFAULT_TEST_STAGING_BASE_PATH}/warehouse"
-DEFAULT_GOLD_WAREHOUSE = f"{DEFAULT_TEST_GOLD_BASE_PATH}/warehouse"
-DEFAULT_METADATA_WAREHOUSE = f"{DEFAULT_TEST_METADATA_BASE_PATH}/warehouse"
+DEFAULT_STAGING_WAREHOUSE = f"{DEFAULT_STAGING_BASE_PATH}/warehouse"
+DEFAULT_GOLD_WAREHOUSE = f"{DEFAULT_GOLD_BASE_PATH}/warehouse"
+DEFAULT_METADATA_WAREHOUSE = f"{DEFAULT_METADATA_BASE_PATH}/warehouse"
 
 
 def table_location(base_path, table):
@@ -77,6 +99,8 @@ def load_runtime_config(default_warehouse, warehouse_env_var="GOLD_ICEBERG_WAREH
 
 
 def create_spark_session(app_name, catalog_name, runtime_config):
+    from pyspark.sql import SparkSession
+
     builder = SparkSession.builder.appName(app_name)
     builder = apply_s3a_options(builder, runtime_config.minio)
     return (

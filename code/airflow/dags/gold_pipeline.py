@@ -1,6 +1,6 @@
 """
 DAG: gold_pipeline
-Spark Gold test pipeline: staging events -> facts -> dimensions -> summaries.
+Spark Gold pipeline: staging events -> facts -> dimensions -> summaries.
 """
 
 from datetime import datetime, timedelta
@@ -23,11 +23,18 @@ ICEBERG_JDBC_URI = env("ICEBERG_JDBC_URI", "jdbc:postgresql://postgres-db:5432/a
 ICEBERG_JDBC_SCHEMA = env("ICEBERG_JDBC_SCHEMA", "iceberg")
 ICEBERG_JDBC_USER = require_env("ICEBERG_JDBC_USER")
 ICEBERG_JDBC_PASSWORD = require_env("ICEBERG_JDBC_PASSWORD")
+GOLD_BUCKET = env("MINIO_BUCKET_GOLD", "gold")
+GOLD_STORAGE_ROOT = env("GOLD_STORAGE_ROOT", f"s3a://{GOLD_BUCKET}").rstrip("/")
+GOLD_STAGING_BASE_PATH = env(
+    "GOLD_STAGING_BASE_PATH",
+    f"{GOLD_STORAGE_ROOT}/gold_staging",
+).rstrip("/")
+GOLD_BASE_PATH = env("GOLD_BASE_PATH", f"{GOLD_STORAGE_ROOT}/gold").rstrip("/")
 GOLD_STAGING_WAREHOUSE = env(
     "GOLD_STAGING_ICEBERG_WAREHOUSE",
-    "s3a://test/gold_staging/warehouse",
+    f"{GOLD_STAGING_BASE_PATH}/warehouse",
 )
-GOLD_WAREHOUSE = env("GOLD_ICEBERG_WAREHOUSE", "s3a://test/gold/warehouse")
+GOLD_WAREHOUSE = env("GOLD_ICEBERG_WAREHOUSE", f"{GOLD_BASE_PATH}/warehouse")
 
 GOLD_JARS = [
     f"{JARS_DIR}/iceberg-spark-runtime-4.0_2.13-1.10.1.jar",
@@ -39,28 +46,28 @@ JARS_CSV = ",".join(LOCAL_JARS)
 
 STAGING_NAMESPACE = "gold_staging"
 STAGING_TABLE = "stg_events"
-STAGING_PATH = "s3a://test/gold_staging/stg_events"
+STAGING_PATH = f"{GOLD_STAGING_BASE_PATH}/stg_events"
 GOLD_NAMESPACE = "gold"
 FACT_EVENTS_TABLE = "fact_events"
 FACT_SALES_TABLE = "fact_sales"
-FACT_EVENTS_PATH = "s3a://test/gold/fact_events"
-FACT_SALES_PATH = "s3a://test/gold/fact_sales"
+FACT_EVENTS_PATH = f"{GOLD_BASE_PATH}/fact_events"
+FACT_SALES_PATH = f"{GOLD_BASE_PATH}/fact_sales"
 DIM_TIME_TABLE = "dim_time"
 DIM_PRODUCT_TABLE = "dim_product"
 DIM_USER_TABLE = "dim_user"
 DIM_SESSION_TABLE = "dim_session"
-DIM_TIME_PATH = "s3a://test/gold/dim_time"
-DIM_PRODUCT_PATH = "s3a://test/gold/dim_product"
-DIM_USER_PATH = "s3a://test/gold/dim_user"
-DIM_SESSION_PATH = "s3a://test/gold/dim_session"
+DIM_TIME_PATH = f"{GOLD_BASE_PATH}/dim_time"
+DIM_PRODUCT_PATH = f"{GOLD_BASE_PATH}/dim_product"
+DIM_USER_PATH = f"{GOLD_BASE_PATH}/dim_user"
+DIM_SESSION_PATH = f"{GOLD_BASE_PATH}/dim_session"
 DAILY_EVENT_SUMMARY_TABLE = "daily_event_summary"
 DAILY_PRODUCT_SUMMARY_TABLE = "daily_product_summary"
 DAILY_CATEGORY_SUMMARY_TABLE = "daily_category_summary"
 DAILY_BRAND_SUMMARY_TABLE = "daily_brand_summary"
-DAILY_EVENT_SUMMARY_PATH = "s3a://test/gold/daily_event_summary"
-DAILY_PRODUCT_SUMMARY_PATH = "s3a://test/gold/daily_product_summary"
-DAILY_CATEGORY_SUMMARY_PATH = "s3a://test/gold/daily_category_summary"
-DAILY_BRAND_SUMMARY_PATH = "s3a://test/gold/daily_brand_summary"
+DAILY_EVENT_SUMMARY_PATH = f"{GOLD_BASE_PATH}/daily_event_summary"
+DAILY_PRODUCT_SUMMARY_PATH = f"{GOLD_BASE_PATH}/daily_product_summary"
+DAILY_CATEGORY_SUMMARY_PATH = f"{GOLD_BASE_PATH}/daily_category_summary"
+DAILY_BRAND_SUMMARY_PATH = f"{GOLD_BASE_PATH}/daily_brand_summary"
 REFRESH_MODE = "full_refresh"
 
 
@@ -109,6 +116,10 @@ def gold_spark_conf(warehouse):
                 GOLD_STAGING_WAREHOUSE
             ),
             "spark.executorEnv.GOLD_ICEBERG_WAREHOUSE": warehouse,
+            "spark.executorEnv.MINIO_BUCKET_GOLD": GOLD_BUCKET,
+            "spark.executorEnv.GOLD_STORAGE_ROOT": GOLD_STORAGE_ROOT,
+            "spark.executorEnv.GOLD_STAGING_BASE_PATH": GOLD_STAGING_BASE_PATH,
+            "spark.executorEnv.GOLD_BASE_PATH": GOLD_BASE_PATH,
         }
     )
     return conf
@@ -126,6 +137,10 @@ def gold_env_vars(warehouse):
         "ICEBERG_JDBC_SCHEMA": ICEBERG_JDBC_SCHEMA,
         "GOLD_STAGING_ICEBERG_WAREHOUSE": GOLD_STAGING_WAREHOUSE,
         "GOLD_ICEBERG_WAREHOUSE": warehouse,
+        "MINIO_BUCKET_GOLD": GOLD_BUCKET,
+        "GOLD_STORAGE_ROOT": GOLD_STORAGE_ROOT,
+        "GOLD_STAGING_BASE_PATH": GOLD_STAGING_BASE_PATH,
+        "GOLD_BASE_PATH": GOLD_BASE_PATH,
     }
 
 
@@ -184,13 +199,13 @@ def summary_task(task_id, summary, name):
 
 @dag(
     dag_id="gold_pipeline",
-    description="Spark Gold test pipeline: staging events -> facts -> dimensions -> summaries",
+    description="Spark Gold pipeline: staging events -> facts -> dimensions -> summaries",
     default_args=default_args,
     start_date=datetime(2026, 5, 1),
     schedule=None,
     catchup=False,
     max_active_runs=1,
-    tags=["gold", "iceberg", "spark", "test"],
+    tags=["gold", "iceberg", "spark"],
 )
 def gold_pipeline():
     prepare_events = SparkSubmitOperator(

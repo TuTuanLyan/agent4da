@@ -11,12 +11,13 @@ if SPARK_DIR not in sys.path:
 
 from gold import staging
 from gold.config import (
+    DEFAULT_ALLOWED_LOCATION_PREFIXES,
     DEFAULT_CATALOG,
     DEFAULT_REFRESH_MODE,
     DEFAULT_SILVER_PATH,
+    DEFAULT_STAGING_BASE_PATH,
     DEFAULT_STAGING_NAMESPACE,
     DEFAULT_STAGING_WAREHOUSE,
-    DEFAULT_TEST_STAGING_BASE_PATH,
     STG_EVENTS,
     create_spark_session,
     load_runtime_config,
@@ -45,7 +46,7 @@ def parse_args(argv=None):
     parser.add_argument("--output-table", default=STG_EVENTS)
     parser.add_argument(
         "--output-path",
-        default=table_location(DEFAULT_TEST_STAGING_BASE_PATH, STG_EVENTS),
+        default=table_location(DEFAULT_STAGING_BASE_PATH, STG_EVENTS),
     )
     parser.add_argument("--refresh-mode", default=DEFAULT_REFRESH_MODE)
     return parser.parse_args(argv)
@@ -54,7 +55,7 @@ def parse_args(argv=None):
 def validate_args(args):
     args.refresh_mode = require_full_refresh(args.refresh_mode, "gold_prepare_events")
     table_identifier(args.catalog_name, args.namespace, args.output_table)
-    assert_safe_table_location(args.output_path, ["s3a://test/"])
+    assert_safe_table_location(args.output_path, DEFAULT_ALLOWED_LOCATION_PREFIXES)
 
 
 def run_task(spark, args):
