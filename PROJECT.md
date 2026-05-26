@@ -1,64 +1,53 @@
-# Project Structure & Environment Guide
+# Agent4DA Project
 
-## 1. Cấu trúc thư mục
-Dưới đây là sơ đồ tổ chức cây thư mục của dự án:
+Agent4DA là hệ thống data pipeline và AI Agent analytics cho e-commerce.
+Pipeline chính đi theo Medallion Architecture: Bronze, Silver, Gold.
 
-```text
-.
-├── app/                    # Core application (UI, API, service chính)
-├── code/                   # Code xử lý chính (business logic, model, pipeline,...)
-├── data/                   # Dữ liệu (input/output, sample data)
-├── imgs/                   # Hình ảnh (phục vụ docs, demo)
-├── log/                    # Log runtime của hệ thống
-├── monitoring/             # Cấu hình monitoring (Prometheus, Grafana,...)
-├── notebook/               # Jupyter notebook (EDA, thử nghiệm nhanh)
-├── orchestration/          # Điều phối quy trình (Airflow, scheduler,...)
-├── script/                 # Các script tiện ích chạy nhanh (bash, util)
-├── utils/                  # Các hàm tiện ích dùng chung cho toàn dự án
-├── dockerfile              # File cấu hình build Docker image
-├── docker-compose.*.yml    # Cấu hình các service (Kafka, MinIO, Postgres, ...)
-├── agent4da.env.yml        # File export môi trường (Conda)
-├── README.md
-└── .gitignore
-```
+## Folder Structure
 
-### Nguyên tắc quản lý:
-* **`app/`**: UI FE, Core Endpoint Backend FastAPI
-* **`code/`**: Nơi tập trung xử lý logic nghiệp vụ; tuyệt đối không để lẫn lộn vào thư mục `app`.
-* **`utils/`**: Chỉ chứa các module được tái sử dụng ở nhiều nơi khác nhau.
-* **`script/`**: Dùng cho các tác vụ phụ trợ, không chứa logic vận hành.
-* **`notebook/`**: Chỉ dùng để nghiên cứu; không được gọi trực tiếp trong môi trường production.
+- `app/`: backend/frontend application.
+- `code/kafka/`: Kafka producer và tài liệu Kafka.
+- `code/spark/`: Spark ETL entrypoints.
+- `code/spark/common/`: helper nhỏ cho env config và S3A.
+- `code/spark/_archive/`: Gold jobs hiện tại và stage jobs cũ, giữ để build lại sau.
+- `code/airflow/dags/`: Airflow DAGs cho Bronze và Silver.
+- `data/`: raw/sample data local.
+- `envs/`: environment variables và local dev secrets.
+- `jars/`: local Spark/Iceberg/Hadoop jars.
+- `docs/`: design và operation docs.
+- `script/`: helper scripts chạy thủ công.
+- `notebook/`: notebook kiểm tra dữ liệu.
+- `init/`: database init scripts.
+- `dockerfile/`: custom Dockerfiles và entrypoint.
+- `monitoring/`: monitoring configs.
 
----
+## Data Pipeline
 
-## 2. Thiết lập môi trường (Environment)
-Để tạo lại môi trường làm việc từ file cấu hình có sẵn:
+Bronze:
+- Đọc raw events từ Kafka.
+- Thêm Kafka metadata.
+- Ghi Parquet vào MinIO Bronze.
 
-**Tạo môi trường mới:**
-```bash
-conda env create -f agent4da.env.yml
-```
+Silver:
+- Chuẩn hóa kiểu dữ liệu.
+- Enrich category levels.
+- Validate và tách valid/invalid records.
+- Deduplicate theo `source_event_id`.
+- Ghi clean Parquet vào MinIO Silver.
 
-**Kích hoạt môi trường:**
-```bash
-conda activate agent4daenv
-```
+Gold:
+- Tạm archive để build lại sau.
+- Không còn trộn config Gold/Iceberg vào Bronze/Silver.
 
----
+## Main Entrypoints
 
-## 3. Cập nhật thư viện (QUAN TRỌNG)
-Để đảm bảo tính đồng nhất giữa các thành viên trong đội ngũ, khi cài đặt thêm bất kỳ package nào, bạn cần thực hiện theo các bước sau:
+- `code/spark/bronze_job.py`
+- `code/spark/silver_job.py`
+- `code/airflow/dags/bronze_pipeline.py`
+- `code/airflow/dags/silver_pipeline.py`
 
-1. **Cài đặt package:**
-```bash
-conda install <package_name>
-# hoặc
-pip install <package_name>
-```
+## Secret Management
 
-2. **BẮT BUỘC export lại cấu hình môi trường:**
-```bash
-conda env export > agent4da.env.yml
-```
-
-**Lưu ý:** Luôn luôn kiểm tra và commit file `agent4da.env.yml` sau khi cập nhật để đồng bộ hóa môi trường trên Git.
+- Secrets nằm trong `envs/*.env` cho local dev.
+- Không hardcode production secrets trong code, DAG hoặc compose.
+- Xem `docs/ENV_SETUP.md` để biết biến cần cấu hình.
