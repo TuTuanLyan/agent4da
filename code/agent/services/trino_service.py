@@ -1,11 +1,12 @@
 import os
-from trino.dbapi import connect
 
 _CONNECTIONS = {}
 
 
 def connect_to_trino(host, port, user, catalog, schema):
     try:
+        from trino.dbapi import connect
+
         connection = connect(
             host=host,
             port=port,
@@ -60,9 +61,12 @@ def row_to_dict(cursor, row):
     names = [desc[0] for desc in cursor.description]
     return dict(zip(names, row))
 
-def execute_query_to_dicts(connection, query):
+def execute_query_to_dicts(connection, query, raise_on_error=False):
     if connection is None:
-        print("[Trino] Cannot execute query because connection is not available.")
+        message = "Cannot execute query because connection is not available."
+        print(f"[Trino] {message}")
+        if raise_on_error:
+            raise RuntimeError(message)
         return []
 
     cursor = None
@@ -72,6 +76,8 @@ def execute_query_to_dicts(connection, query):
         return [row_to_dict(cursor, row) for row in cursor.fetchall()]
     except Exception as e:
         print(f"[Trino] Failed to execute query: {e}")
+        if raise_on_error:
+            raise
         return []
     finally:
         if cursor:

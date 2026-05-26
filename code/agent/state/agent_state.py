@@ -4,9 +4,7 @@ class AgentState(TypedDict, total=False):
 
     user_question: str
 
-    full_metadata: dict
-
-    filtered_metadata: dict
+    schema_context: str
 
     prompt: str
 

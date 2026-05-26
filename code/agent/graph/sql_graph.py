@@ -3,7 +3,6 @@ from langgraph.graph import StateGraph, START, END
 from state.agent_state import AgentState
 
 from nodes.load_metadata_node import load_metadata_node
-from nodes.filter_schema_node import filter_schema_node
 from nodes.build_prompt_node import build_prompt_node
 from nodes.text2sql_node import generate_sql_node
 from nodes.guard_sql_node import guard_sql_node
@@ -13,8 +12,6 @@ from nodes.execute_sql_node import execute_sql_node
 builder = StateGraph(AgentState)
 
 builder.add_node("load_metadata", load_metadata_node)
-
-builder.add_node("filter_schema", filter_schema_node)
 
 builder.add_node("build_prompt", build_prompt_node)
 
@@ -27,9 +24,7 @@ builder.add_node("execute_sql", execute_sql_node)
 
 builder.add_edge(START, "load_metadata")
 
-builder.add_edge("load_metadata", "filter_schema")
-
-builder.add_edge("filter_schema", "build_prompt")
+builder.add_edge("load_metadata", "build_prompt")
 
 builder.add_edge("build_prompt", "generate_sql")
 

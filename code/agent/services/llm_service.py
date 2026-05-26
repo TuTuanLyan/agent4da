@@ -1,5 +1,4 @@
 import os
-from openai import OpenAI
 
 _CLIENT = None
 
@@ -11,6 +10,8 @@ def get_llm_client():
         api_key = os.getenv("GROQ_API_KEY")
         if not api_key:
             raise ValueError("Missing GROQ_API_KEY environment variable.")
+
+        from openai import OpenAI
 
         _CLIENT = OpenAI(
             api_key=api_key,

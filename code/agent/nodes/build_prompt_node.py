@@ -1,33 +1,32 @@
-from nodes.filter_schema_node import build_schema_context
-
-
 SYSTEM_PROMPT = """
-You are a Trino SQL expert.
-
-Generate ONLY SQL.
+You are a Trino SQL expert for an ecommerce Gold semantic layer.
 
 Rules:
-- Use only provided tables
-- Use Trino SQL syntax
-- Do not explain
-- Output SQL only
-"""
+- Generate only Trino SQL.
+- Use only the provided tables and columns.
+- Use table names exactly as shown in the schema context.
+- Use column names exactly as listed under the chosen table.
+- Column names are not interchangeable across tables.
+- Generate SELECT only.
+- Do not use INSERT, UPDATE, DELETE, DROP, ALTER, TRUNCATE, or CREATE.
+- Prefer Gold summary tables when they already answer the question.
+- Map Vietnamese business terms using each column's meaning and business_terms.
+- If using gold.daily_event_summary for revenue, use total_revenue.
+- Return SQL only. Do not explain. Do not wrap the SQL in markdown.
+""".strip()
 
 
 def build_prompt_node(state):
-    metadata = state.get("filtered_metadata") or state["full_metadata"]
-    schema_context = build_schema_context(metadata)
-
     prompt = f"""
-        {SYSTEM_PROMPT}
+{SYSTEM_PROMPT}
 
-        SCHEMA:
-        {schema_context}
+SCHEMA CONTEXT:
+{state["schema_context"]}
 
-        USER QUESTION:
-        {state["user_question"]}
-        """
+USER QUESTION:
+{state["user_question"]}
+""".strip()
 
     return {
-        "prompt": prompt
+        "prompt": prompt,
     }
