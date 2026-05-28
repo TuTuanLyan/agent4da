@@ -15,6 +15,14 @@ __pycache__/
 .vscode/
 .idea/
 
+<<<<<<< Updated upstream
+=======
+envs/*
+!envs/
+!envs/*.env.example
+>>>>>>> Stashed changes
 *.env
 .env.*
-.env
+.envjars/
+jars/
+jars/
