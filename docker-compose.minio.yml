@@ -1,42 +1,29 @@
 services:
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     container_name: minio
     command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: admin
-      MINIO_ROOT_PASSWORD: 12345678
+    env_file:
+      - ./envs/minio.env
     volumes:
-      - ./minio_data:/data
+      # Named volume — Docker quản lý, không nằm lẫn vào project tree.
+      # Production: dùng named volume hoặc bind mount ra /data/minio (ngoài project).
+      # Để xem data ở đâu: docker volume inspect <project>_minio_data
+      # Để backup:         docker run --rm -v <project>_minio_data:/data -v $(pwd):/out alpine tar czf /out/minio_backup.tar.gz /data
+      - minio_data:/data
     ports:
-      - "9000:9000"
-      - "9001:9001"
-    privileged: true
-    security_opt:
-      - apparmor=unconfined
-      - seccomp=unconfined
+      - "9000:9000"   # S3 API — Spark kết nối vào đây
+      - "9001:9001"   # Console UI — http://localhost:9001
     restart: unless-stopped
+    networks:
+      - data_network  # Cùng network với Spark/Kafka — dùng http://minio:9000 nội bộ
 
-  cloudflared-api:
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflared-api
-    depends_on:
-      - minio
-    command: tunnel --no-autoupdate --url http://minio:9000 --protocol http2
-    restart: unless-stopped
-    privileged: true
-    security_opt:
-      - apparmor=unconfined
-      - seccomp:unconfined
+networks:
+  data_network:
+    external: true
+    name: data_network
 
-  cloudflared-console:
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflared-console
-    depends_on:
-      - minio
-    command: tunnel --no-autoupdate --url http://minio:9001 --protocol http2
-    restart: unless-stopped
-    privileged: true
-    security_opt:
-      - apparmor=unconfined
-      - seccomp:unconfined
+volumes:
+  minio_data:
+    # Docker-managed volume. Dữ liệu tồn tại kể cả khi container bị xóa.
+    # Chỉ mất khi chạy: docker volume rm <project>_minio_data

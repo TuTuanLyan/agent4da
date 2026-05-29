@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-db
+    restart: unless-stopped
+
+    env_file:
+      - ./envs/postgre.env
+
+    environment:
+      # Đặt search_path mặc định — tiện query không cần prefix schema
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Init scripts — chạy theo thứ tự alphabet, chỉ chạy lần đầu tiên
+      - ./init:/docker-entrypoint-initdb.d:ro
+
+    networks:
+      - data_network
+
+    ports:
+      - "5432:5432"
+
+    # Healthcheck — Airflow depends_on condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+    security_opt:
+      - apparmor=unconfined
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  data_network:
+    external: true
+    name: data_network

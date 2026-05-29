@@ -1,0 +1,53 @@
+[project]
+name = "agent4da-app-backend"
+version = "0.1.0"
+description = "Agent4DA Analytics Console backend - FastAPI service wrapping the LangGraph agent."
+requires-python = ">=3.12"
+
+# Phase 1 only needs the API to boot with /healthz. Later phases add SQLAlchemy,
+# Alembic, JWT, sqlglot, Trino client, Airflow client, minio SDK, etc. - all
+# tracked in app/backend/requirements/*.txt to keep this file readable.
+dependencies = [
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.30,<1",
+    "pydantic>=2.7,<3",
+    "pydantic-settings>=2.4,<3",
+    "pydantic[email]>=2.7,<3",
+    "structlog>=24.1,<26",
+    "python-dotenv>=1.0,<2",
+    # Phase 2 additions
+    "sqlalchemy>=2.0,<3",
+    "alembic>=1.13,<2",
+    "psycopg[binary]>=3.2,<4",
+    "argon2-cffi>=23.1,<26",
+    "pyjwt>=2.9,<3",
+    "python-multipart>=0.0.9,<1",
+    # Phase 3 additions (agent + Trino + Groq via OpenAI-compatible client)
+    "langgraph>=1.0,<2",
+    "langchain-core>=1.0,<2",
+    "openai>=1.40,<3",
+    "packaging>=24.0,<27",
+    "sqlglot>=25.0,<28",
+    "trino>=0.328,<1",
+    # Phase 6 additions (Airflow REST client)
+    "httpx>=0.27,<1",
+    # Phase 7 additions (scheduler + object store stats)
+    "apscheduler>=3.10,<4",
+    "minio>=7.2,<8",
+    "pyarrow>=16.0,<23",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2,<9",
+    "httpx>=0.27,<1",
+    "pytest-asyncio>=0.23,<1",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["api*"]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"

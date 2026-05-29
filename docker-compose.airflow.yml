@@ -1,0 +1,147 @@
+# =============================================================================
+# docker-compose.airflow.yml
+#
+# Stack: Airflow 2.10.4 + PostgreSQL 16 (shared instance)
+#
+# Giải quyết triệt để:
+#   - Password bị ghi đè   → entrypoint.sh reset password trước khi webserver start
+#   - "No host supplied"   → AIRFLOW__WEBSERVER__WORKER_LOG_SERVER_HOST="airflow"
+#   - Log permission       → named volume airflow_logs (uid=50000 owns natively)
+#   - Bundle jar duplicate → chỉ mount ./jars, loại bỏ bundle-2.29.52.jar plain
+#   - Task fail ngay       → log path dùng named volume, không bind mount host
+#
+# Postgres schema layout (dùng chung 1 instance):
+#   - airflow     → Airflow metadata (DAGs, task states, xcom, ...)
+#   - iceberg     → Iceberg REST catalog (sau này)
+#   - public      → App backend, general
+#   - bronze_meta → catalog metadata bronze layer (sau này)
+# =============================================================================
+
+services:
+  # ── Airflow ────────────────────────────────────────────────────────────────
+  airflow:
+    build:
+      context: .
+      dockerfile: dockerfile/Dockerfile.airflow
+
+    container_name: airflow
+    hostname: airflow          # quan trọng: webserver dùng hostname này để build log URL
+    restart: unless-stopped
+
+    ports:
+      - "8081:8080"            # Airflow UI → http://localhost:8081
+      - "8793:8793"            # Log server — webserver fetch task logs qua port này
+
+    environment:
+      # ── Core ─────────────────────────────────────────────────────────────
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/project/dags
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      # socket.gethostname() trả về "airflow" (khớp với hostname: airflow ở trên)
+      # Airflow dùng giá trị này để build URL log: http://airflow:8793/log/...
+      AIRFLOW__CORE__HOSTNAME_CALLABLE: "socket.gethostname"
+
+      # ── Webserver ────────────────────────────────────────────────────────
+      AIRFLOW__WEBSERVER__BASE_URL: "http://localhost:8081"
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+      AIRFLOW__WEBSERVER__LOG_FETCH_TIMEOUT_SEC: "30"
+      # Allow app-api to use APP_AIRFLOW_USER / APP_AIRFLOW_PASSWORD against
+      # Airflow's stable REST API while keeping browser sessions available.
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+      # FIX "No host supplied": chỉ định tường minh hostname của log server
+      # Webserver sẽ fetch log tại: http://airflow:8793/log/dag_id=.../...
+      AIRFLOW__WEBSERVER__WORKER_LOG_SERVER_HOST: "airflow"
+
+      # ── Logging ──────────────────────────────────────────────────────────
+      # Dùng named volume — uid=50000 (airflow user) tự có quyền ghi ngay
+      # Không bind mount ./log/airflow → tránh hoàn toàn permission denied
+      AIRFLOW__LOGGING__BASE_LOG_FOLDER: /opt/airflow/logs
+      AIRFLOW__LOGGING__LOGGING_LEVEL: "INFO"
+      AIRFLOW__LOGGING__WORKER_LOG_SERVER_PORT: "8793"
+
+      # ── Scheduler ────────────────────────────────────────────────────────
+      AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: "true"
+      AIRFLOW__SCHEDULER__CATCHUP_BY_DEFAULT: "false"
+
+      # ── Connections ──────────────────────────────────────────────────────
+      # SparkSubmitOperator dùng conn_id="spark_default"
+      AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type":"spark","host":"spark://spark-master","port":7077}'
+
+    env_file:
+      - ./envs/postgre.env
+      - ./envs/app.env
+      - path: ./envs/airflow.env
+        required: false
+      - path: ./envs/minio.env
+        required: false
+      - path: ./envs/iceberg.env
+        required: false
+      - path: ./envs/spark.env
+        required: false
+
+    volumes:
+      - ./code/airflow/dags:/opt/project/dags     # DAG files
+      - ./code:/opt/project/code                  # spark/bronze_job.py, etc.
+      - ./data:/opt/project/data                  # CSV data
+      - ./jars:/opt/project/jars:ro               # jars cho spark-submit
+      # Named volume cho logs — không phụ thuộc UID host
+      - airflow_logs:/opt/airflow/logs
+      - airflow_home:/opt/airflow
+
+    networks:
+      - data_network
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
+  # Shared instance — nhiều schema cho nhiều mục đích khác nhau
+  # Xem init/01_init_schemas.sh để biết schema layout
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres-db
+    restart: unless-stopped
+
+    env_file:
+      - ./envs/postgre.env
+
+    environment:
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Init script chỉ chạy 1 lần khi volume lần đầu được tạo
+      - ./init:/docker-entrypoint-initdb.d:ro
+
+    networks:
+      - data_network
+
+    ports:
+      - "5432:5432"
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+# ── Networks & Volumes ────────────────────────────────────────────────────────
+networks:
+  data_network:
+    external: true
+    name: data_network
+
+volumes:
+  airflow_home:
+  airflow_logs:     # named volume — airflow user (uid=50000) tự có quyền ghi
+  postgres_data:
+    driver: local
