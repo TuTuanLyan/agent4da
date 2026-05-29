@@ -46,6 +46,11 @@ Gold:
 - `code/airflow/dags/bronze_pipeline.py`
 - `code/airflow/dags/silver_pipeline.py`
 
+## Dashboard Metrics
+
+- `code/agent/services/metrics_service.py`: Chứa các câu truy vấn metrics có thể tái sử dụng, được lấy dữ liệu thông qua nền tảng Trino.
+- `docs/DASHBOARD_METRICS.md`: Tài liệu đặc tả giữa FE và BE dùng để xây dựng các thẻ hiển thị chỉ số và biểu đồ.
+
 ## Secret Management
 
 - Secrets nằm trong `envs/*.env` cho local dev.

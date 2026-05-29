@@ -11,12 +11,14 @@ from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOpe
 from dag_common import (
     base_spark_conf,
     build_classpath,
+    build_local_jars_csv,
     env,
     minio_executor_conf,
 )
 
 
 CLASSPATH = build_classpath()
+LOCAL_JARS = build_local_jars_csv()
 
 
 default_args = {
@@ -55,6 +57,9 @@ def silver_pipeline():
         conn_id="spark_default",
         application="/opt/project/code/spark/silver_job.py",
         jars=None,
+        # --jars với scheme local: (xem chú thích trong bronze_pipeline.py):
+        # datasource discoverable mà không copy jar vào worker-logs mỗi lần chạy.
+        jars=LOCAL_JARS,
         driver_class_path=CLASSPATH,
         conf=conf,
         packages=None,
