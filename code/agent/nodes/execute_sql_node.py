@@ -10,6 +10,7 @@ def execute_sql_node(state):
             get_trino_connection(),
             state["generated_sql"],
             raise_on_error=True,
+            run_id=state.get("run_id"),
         )
     except Exception as exc:
         return {

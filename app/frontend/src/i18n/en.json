@@ -1,0 +1,14 @@
+{
+  "app.name": "Agent4DA",
+  "nav.ask": "Ask",
+  "nav.history": "History",
+  "nav.catalog": "Catalog",
+  "nav.pipelines": "Pipelines",
+  "nav.settings": "Settings",
+  "status.ready": "Ready",
+  "status.check": "Check",
+  "error.retry": "Retry",
+  "ask.empty": "Ask a question above to see the agent run.",
+  "catalog.unavailable": "Catalog metadata is not ready. Run the Gold and metadata pipelines, then retry.",
+  "groq.missing": "Groq is not configured. Add GROQ_API_KEY and restart the backend."
+}

@@ -7,6 +7,7 @@ from nodes.build_prompt_node import build_prompt_node
 from nodes.text2sql_node import generate_sql_node
 from nodes.guard_sql_node import guard_sql_node
 from nodes.execute_sql_node import execute_sql_node
+from nodes.summarize_node import summarize_node
 
 
 builder = StateGraph(AgentState)
@@ -21,6 +22,8 @@ builder.add_node("guard_sql", guard_sql_node)
 
 builder.add_node("execute_sql", execute_sql_node)
 
+builder.add_node("summarize", summarize_node)
+
 
 builder.add_edge(START, "load_metadata")
 
@@ -32,7 +35,9 @@ builder.add_edge("generate_sql", "guard_sql")
 
 builder.add_edge("guard_sql", "execute_sql")
 
-builder.add_edge("execute_sql", END)
+builder.add_edge("execute_sql", "summarize")
+
+builder.add_edge("summarize", END)
 
 
 graph = builder.compile()

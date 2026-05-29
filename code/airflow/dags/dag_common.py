@@ -39,6 +39,20 @@ def build_classpath():
     return ":".join(BASE_JARS)
 
 
+def build_local_jars_csv():
+    """Comma-separated --jars list using Spark's ``local:`` URI scheme.
+
+    ``local:`` tells Spark the jar already exists on every node (driver +
+    executors) at that path — here via the ``./jars:/opt/project/jars`` mount
+    on the airflow / spark-master / spark-worker containers. Spark therefore
+    adds the jar to the *application* classloader (so datasource discovery like
+    ``.format("kafka")`` works) WITHOUT copying it into worker-logs on every
+    run. Plain ``--jars`` (file paths) would copy ~700MB-1.4GB per run and
+    bloat ``log/spark`` to tens of GB on a 10-minute DAG.
+    """
+    return ",".join(f"local:{jar}" for jar in BASE_JARS)
+
+
 def base_spark_conf(classpath):
     return {
         "spark.executor.extraClassPath": classpath,

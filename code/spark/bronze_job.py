@@ -102,6 +102,43 @@ def transform_bronze(raw_df):
 
 
 # ---------------------------------------------------------------------------
+# Kafka read (with self-healing offsets)
+# ---------------------------------------------------------------------------
+def _load_kafka(spark, config, starting_offsets):
+    return (
+        spark.read
+        .format("kafka")
+        .option("kafka.bootstrap.servers", config.kafka_bootstrap)
+        .option("subscribe",               config.kafka_topic)
+        .option("startingOffsets",         starting_offsets)
+        .option("endingOffsets",           "latest")
+        .option("failOnDataLoss",          "false")   # tránh lỗi khi topic reset
+        .load()
+    )
+
+
+def read_kafka_with_fallback(spark, config, starting_offsets):
+    """Đọc Kafka theo offset đã lưu; nếu offset không còn khớp topic
+    (vd: topic bị tạo lại/đổi số partition sau khi reset Kafka) thì tự động
+    fallback về 'earliest' thay vì fail mãi mãi vì file offset cũ.
+
+    Trả về (dataframe, used_earliest: bool).
+    """
+    if starting_offsets == "earliest":
+        return _load_kafka(spark, config, "earliest"), True
+
+    df = _load_kafka(spark, config, starting_offsets)
+    try:
+        # Ép Kafka gán partition NGAY để lỗi mismatch lộ ra ở đây.
+        df.limit(1).count()
+        return df, False
+    except Exception as exc:
+        print(f"[Bronze] Saved offsets rejected ({type(exc).__name__}: {exc}).")
+        print("[Bronze] Topic likely reset -> fallback startingOffsets=earliest.")
+        return _load_kafka(spark, config, "earliest"), True
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
@@ -121,17 +158,11 @@ def main():
     starting_offsets = build_starting_offsets(current_offsets, config.kafka_topic)
     print(f"[Bronze] Starting offsets: {starting_offsets}")
 
-    # 2. Đọc Kafka
-    raw_df = (
-        spark.read
-        .format("kafka")
-        .option("kafka.bootstrap.servers", config.kafka_bootstrap)
-        .option("subscribe",               config.kafka_topic)
-        .option("startingOffsets",         starting_offsets)
-        .option("endingOffsets",           "latest")
-        .option("failOnDataLoss",          "false")   # tránh lỗi khi topic reset
-        .load()
-    )
+    # 2. Đọc Kafka (tự fallback 'earliest' nếu offset cũ không khớp topic)
+    raw_df, used_earliest = read_kafka_with_fallback(spark, config, starting_offsets)
+    if used_earliest:
+        # Offset cũ đã bị loại bỏ -> không merge lại partition cũ ở bước 5.
+        current_offsets = {}
 
     # 3. Kiểm tra dữ liệu mới
     if raw_df.limit(1).count() == 0:

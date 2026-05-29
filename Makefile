@@ -3,7 +3,7 @@
 # ==============================
 
 # Danh sách service
-SERVICES := kafka spark minio postgre airflow trino
+SERVICES := kafka spark minio postgre airflow trino app
 
 # Tên file compose
 COMPOSE_kafka    := docker-compose.kafka.yml
@@ -12,6 +12,7 @@ COMPOSE_minio    := docker-compose.minio.yml
 COMPOSE_postgre := docker-compose.postgre.yml
 COMPOSE_airflow := docker-compose.airflow.yml
 COMPOSE_trino    := docker-compose.trino.yml
+COMPOSE_app      := docker-compose.app.yml
 
 # ==============================
 # Helper macro
@@ -33,6 +34,17 @@ define compose_restart
 	docker compose -f $(1) restart
 endef
 
+# Build images from source (needed after editing app/backend or app/frontend).
+define compose_build
+	docker compose -f $(1) build
+endef
+
+# Rebuild from source AND recreate containers — use this to pick up code changes
+# (e.g. the frontend theme toggle). Plain `*-up` reuses the cached image.
+define compose_rebuild
+	docker compose -f $(1) up -d --build --force-recreate
+endef
+
 # ==============================
 # Generate commands automatically
 # ==============================
@@ -42,6 +54,8 @@ $(eval $(svc)-up: ; @$(call compose_up,$(COMPOSE_$(svc)))) \
 $(eval $(svc)-down: ; @$(call compose_down,$(COMPOSE_$(svc)))) \
 $(eval $(svc)-logs: ; @$(call compose_logs,$(COMPOSE_$(svc)))) \
 $(eval $(svc)-restart: ; @$(call compose_restart,$(COMPOSE_$(svc)))) \
+$(eval $(svc)-build: ; @$(call compose_build,$(COMPOSE_$(svc)))) \
+$(eval $(svc)-rebuild: ; @$(call compose_rebuild,$(COMPOSE_$(svc)))) \
 )
 
 # ==============================
@@ -101,6 +115,9 @@ help:
 	@echo "  make postgre-up"
 	@echo "  make airflow-up"
 	@echo "  make trino-up"
+	@echo "  make app-up           # Analytics Console (cached image)"
+	@echo "  make app-rebuild      # Rebuild from source + recreate (pick up code changes)"
+	@echo "  make app-build        # Build images only"
 	@echo ""
 	@echo "  make all-up"
 	@echo "  make all-down"

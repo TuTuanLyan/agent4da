@@ -3,6 +3,25 @@ import os
 _CONNECTIONS = {}
 
 
+def _register_query_id(run_id, cursor):
+    if not run_id:
+        return
+    query_id = getattr(cursor, "query_id", None)
+    if not query_id:
+        stats = getattr(cursor, "stats", None)
+        if isinstance(stats, dict):
+            query_id = stats.get("queryId") or stats.get("query_id")
+    if not query_id:
+        return
+    try:
+        from agent import cancellation
+
+        cancellation.set_trino_query_id(str(run_id), str(query_id))
+    except Exception:
+        # CLI/debug usage does not import the web backend package.
+        return
+
+
 def connect_to_trino(host, port, user, catalog, schema):
     try:
         from trino.dbapi import connect
@@ -12,7 +31,8 @@ def connect_to_trino(host, port, user, catalog, schema):
             port=port,
             user=user,
             catalog=catalog,
-            schema=schema
+            schema=schema,
+            session_properties={"query_max_execution_time": "30s"},
         )
         print("[Trino] Connection to Trino established successfully.")
         return connection
@@ -61,7 +81,7 @@ def row_to_dict(cursor, row):
     names = [desc[0] for desc in cursor.description]
     return dict(zip(names, row))
 
-def execute_query_to_dicts(connection, query, raise_on_error=False):
+def execute_query_to_dicts(connection, query, raise_on_error=False, run_id=None):
     if connection is None:
         message = "Cannot execute query because connection is not available."
         print(f"[Trino] {message}")
@@ -73,6 +93,7 @@ def execute_query_to_dicts(connection, query, raise_on_error=False):
     try:
         cursor = connection.cursor()
         cursor.execute(query)
+        _register_query_id(run_id, cursor)
         return [row_to_dict(cursor, row) for row in cursor.fetchall()]
     except Exception as e:
         print(f"[Trino] Failed to execute query: {e}")

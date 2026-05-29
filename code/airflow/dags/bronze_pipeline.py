@@ -12,12 +12,14 @@ from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOpe
 from dag_common import (
     base_spark_conf,
     build_classpath,
+    build_local_jars_csv,
     env,
     minio_executor_conf,
 )
 
 
 CLASSPATH = build_classpath()
+LOCAL_JARS = build_local_jars_csv()
 
 # ---------------------------------------------------------------------------
 default_args = {
@@ -60,8 +62,13 @@ def bronze_pipeline():
         # Script — path trong container airflow (volume ./code → /opt/project/code)
         application="/opt/project/code/spark/bronze_job.py",
 
-        # Không dùng --jars: tránh Spark copy jar vào log/spark/app-* mỗi lần chạy.
-        jars=None,
+        # Dùng --jars với scheme local: (jar đã mount sẵn ở /opt/project/jars
+        # trên mọi node). Cần --jars để Kafka datasource (.format("kafka"))
+        # được nạp vào application classloader — chỉ extraClassPath/
+        # --driver-class-path là KHÔNG đủ cho datasource discovery. Scheme
+        # local: giúp Spark KHÔNG copy jar vào worker-logs mỗi lần chạy, tránh
+        # phình log/spark hàng chục GB (DAG chạy mỗi 10 phút).
+        jars=LOCAL_JARS,
 
         # --driver-class-path: JVM classpath cho driver process (colon-separated)
         driver_class_path=CLASSPATH,
