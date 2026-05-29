@@ -56,6 +56,7 @@ def silver_pipeline():
         task_id="spark_silver_job",
         conn_id="spark_default",
         application="/opt/project/code/spark/silver_job.py",
+        jars=None,
         # --jars với scheme local: (xem chú thích trong bronze_pipeline.py):
         # datasource discoverable mà không copy jar vào worker-logs mỗi lần chạy.
         jars=LOCAL_JARS,

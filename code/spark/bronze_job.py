@@ -158,6 +158,17 @@ def main():
     starting_offsets = build_starting_offsets(current_offsets, config.kafka_topic)
     print(f"[Bronze] Starting offsets: {starting_offsets}")
 
+    # 2. Đọc Kafka
+    raw_df = (
+        spark.read
+        .format("kafka")
+        .option("kafka.bootstrap.servers", config.kafka_bootstrap)
+        .option("subscribe",               config.kafka_topic)
+        .option("startingOffsets",         starting_offsets)
+        .option("endingOffsets",           "latest")
+        .option("failOnDataLoss",          "false")   # tránh lỗi khi topic reset
+        .load()
+    )
     # 2. Đọc Kafka (tự fallback 'earliest' nếu offset cũ không khớp topic)
     raw_df, used_earliest = read_kafka_with_fallback(spark, config, starting_offsets)
     if used_earliest:

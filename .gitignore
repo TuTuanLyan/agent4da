@@ -28,7 +28,17 @@ notebook/.ipynb_checkpoints/
 .claude/
 .agents/
 
+envs/*
+!envs/
+!envs/*.env.example
+*.env
+.env.*
+.envjars/
+jars/
+jars/
+
 envs/
 *.env
 .env.*
 .env
+

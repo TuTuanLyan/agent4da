@@ -68,6 +68,10 @@ services:
       AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type":"spark","host":"spark://spark-master","port":7077}'
 
     env_file:
+      - ./envs/airflow.env
+      - ./envs/minio.env
+      - ./envs/iceberg.env
+      - ./envs/spark.env
       - ./envs/postgre.env
       - ./envs/app.env
       - path: ./envs/airflow.env
