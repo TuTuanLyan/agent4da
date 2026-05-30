@@ -1,3 +1,6 @@
+.DS_Store
+node_modules/
+.next/
 log/
 data/
 dataset/
@@ -5,24 +8,37 @@ model/
 models/
 __pycache__/
 
+jars/
+data/.spark_ivy/
+data/.spark_ivy_airflow/
+notebook/.ipynb_checkpoints/
+
 *.pyc
 *.pkl
 *.h5
 *.ckpt
 *.log
 *.csv
+*.tsbuildinfo
 
 .vscode/
 .idea/
+.agent/
+.codex/
+.claude/
+.agents/
 
-<<<<<<< Updated upstream
-=======
 envs/*
 !envs/
 !envs/*.env.example
->>>>>>> Stashed changes
 *.env
 .env.*
 .envjars/
 jars/
 jars/
+
+envs/
+*.env
+.env.*
+.env
+

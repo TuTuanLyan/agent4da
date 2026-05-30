@@ -45,6 +45,9 @@ services:
       AIRFLOW__WEBSERVER__BASE_URL: "http://localhost:8082"
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
       AIRFLOW__WEBSERVER__LOG_FETCH_TIMEOUT_SEC: "30"
+      # Allow app-api to use APP_AIRFLOW_USER / APP_AIRFLOW_PASSWORD against
+      # Airflow's stable REST API while keeping browser sessions available.
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
       # FIX "No host supplied": chỉ định tường minh hostname của log server
       # Webserver sẽ fetch log tại: http://airflow:8793/log/dag_id=.../...
       AIRFLOW__WEBSERVER__WORKER_LOG_SERVER_HOST: "airflow"
@@ -69,6 +72,16 @@ services:
       - ./envs/minio.env
       - ./envs/iceberg.env
       - ./envs/spark.env
+      - ./envs/postgre.env
+      - ./envs/app.env
+      - path: ./envs/airflow.env
+        required: false
+      - path: ./envs/minio.env
+        required: false
+      - path: ./envs/iceberg.env
+        required: false
+      - path: ./envs/spark.env
+        required: false
 
     volumes:
       - ./code/airflow/dags:/opt/project/dags     # DAG files

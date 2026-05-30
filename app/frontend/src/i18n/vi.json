@@ -1,0 +1,14 @@
+{
+  "app.name": "Agent4DA",
+  "nav.ask": "Hoi dap",
+  "nav.history": "Lich su",
+  "nav.catalog": "Catalog",
+  "nav.pipelines": "Pipeline",
+  "nav.settings": "Cai dat",
+  "status.ready": "San sang",
+  "status.check": "Can kiem tra",
+  "error.retry": "Thu lai",
+  "ask.empty": "Nhap cau hoi de chay agent.",
+  "catalog.unavailable": "Metadata catalog chua san sang. Hay chay Gold pipeline va metadata pipeline roi thu lai.",
+  "groq.missing": "Groq chua duoc cau hinh. Them GROQ_API_KEY va khoi dong lai backend."
+}

@@ -145,13 +145,33 @@ def _used_tables(sql: str) -> list[str]:
     return unique_refs
 
 
-def _metadata_columns_sql(table_name: str) -> str:
+SEMANTIC_TABLE_CATALOG = "iceberg_catalog.metadata.semantic_table_catalog"
+SEMANTIC_COLUMN_CATALOG = "iceberg_catalog.metadata.semantic_column_catalog"
+GOLD_SCHEMA = "gold"
+
+
+def _metadata_tables_sql() -> str:
+    table_expr = (
+        f"CASE WHEN starts_with(table_name, '{GOLD_SCHEMA}.') "
+        f"THEN substr(table_name, {len(GOLD_SCHEMA) + 2}) "
+        "ELSE table_name END"
+    )
     return (
-        "SELECT column_name, data_type "
-        "FROM iceberg_catalog.information_schema.columns "
-        "WHERE table_schema = 'gold' "
-        f"AND table_name = '{table_name}' "
-        "ORDER BY ordinal_position"
+        f"SELECT {table_expr} AS table_name "
+        f"FROM {SEMANTIC_TABLE_CATALOG} "
+        "WHERE is_agent_visible = true "
+        "ORDER BY table_name"
+    )
+
+
+def _metadata_columns_sql(table_name: str) -> str:
+    qualified_table_name = f"{GOLD_SCHEMA}.{table_name}"
+    return (
+        "SELECT DISTINCT column_name, data_type "
+        f"FROM {SEMANTIC_COLUMN_CATALOG} "
+        "WHERE is_agent_visible = true "
+        f"AND table_name IN ('{table_name}', '{qualified_table_name}') "
+        "ORDER BY column_name"
     )
 
 
@@ -550,7 +570,7 @@ def metadata_answer_node(state: AgentState) -> AgentState:
         }
 
     if intent == "metadata_tables":
-        generated_sql = "SHOW TABLES FROM iceberg_catalog.gold"
+        generated_sql = _metadata_tables_sql()
         tables = get_gold_tables()
         rows = [{"Table": table} for table in tables]
         full_metadata = get_gold_metadata()
@@ -624,10 +644,13 @@ def metadata_answer_node(state: AgentState) -> AgentState:
     }
 
 
-def unsupported_node(state: AgentState) -> AgentState:
+def assistive_clarification_node(state: AgentState) -> AgentState:
     return {
         **state,
-        "answer": "Câu hỏi này nằm ngoài phạm vi dữ liệu e-commerce Gold hiện tại.",
+        "answer": (
+            "Mình chưa đủ thông tin hoặc nguồn dữ liệu phù hợp để tạo truy vấn an toàn. "
+            "Bạn có thể hỏi về doanh thu, event, brand, category, product hoặc conversion trong dữ liệu e-commerce Gold."
+        ),
         "generated_sql": "",
         "used_tables": [],
         "row_count": 0,
@@ -638,7 +661,7 @@ def unsupported_node(state: AgentState) -> AgentState:
         "llm_insight_used": False,
         "confidence": "low",
         "validation_notes": [],
-        "chart": _empty_chart("Câu hỏi ngoài phạm vi không có chart recommendation."),
+        "chart": _empty_chart("Câu hỏi cần làm rõ chưa có chart recommendation."),
         "chart_type": None,
         "chart_data": [],
         "metadata_used": {"tables": [], "columns": {}, "semantic_available": False, "semantic_tables": [], "semantic_columns": {}, "metadata_source": "technical"},
@@ -904,7 +927,7 @@ def route_after_intent(state: AgentState) -> str:
     if intent in {"metadata_tables", "metadata_columns", "metadata_business"}:
         return "metadata_answer"
     if intent == "unsupported":
-        return "unsupported"
+        return "assistive_clarification"
     return "metadata"
 
 
@@ -945,7 +968,7 @@ def _build_graph(checkpointer):
     builder.add_node("intent_router", intent_router_node)
     builder.add_node("metadata", metadata_node)
     builder.add_node("metadata_answer", metadata_answer_node)
-    builder.add_node("unsupported", unsupported_node)
+    builder.add_node("assistive_clarification", assistive_clarification_node)
     builder.add_node("text_to_sql", text_to_sql_node)
     builder.add_node("guard", guard_node)
     builder.add_node("execute_sql", execute_sql_node)
@@ -974,12 +997,12 @@ def _build_graph(checkpointer):
         route_after_intent,
         {
             "metadata_answer": "metadata_answer",
-            "unsupported": "unsupported",
+            "assistive_clarification": "assistive_clarification",
             "metadata": "metadata",
         },
     )
     builder.add_edge("metadata_answer", "save_context")
-    builder.add_edge("unsupported", "save_context")
+    builder.add_edge("assistive_clarification", "save_context")
     builder.add_edge("metadata", "text_to_sql")
     builder.add_edge("text_to_sql", "guard")
     builder.add_conditional_edges(

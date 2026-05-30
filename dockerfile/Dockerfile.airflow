@@ -19,6 +19,12 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ && JAVA_HOME_DIR="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" \
+ && ln -s "$JAVA_HOME_DIR" /usr/lib/jvm/java-17-openjdk-current \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-current
 
 # Copy toàn bộ Spark từ spark image (spark-submit, pyspark, conf, jars gốc)
 COPY --from=spark /opt/spark /opt/spark
@@ -39,4 +45,5 @@ RUN pip install --no-cache-dir \
     psycopg2-binary==2.9.9 \
     kafka-python-ng
 
+ENTRYPOINT ["/entrypoint.sh"]
 ENTRYPOINT ["/entrypoint.sh"]

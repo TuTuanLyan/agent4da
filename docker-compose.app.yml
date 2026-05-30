@@ -1,0 +1,84 @@
+services:
+  app-api:
+    build:
+      context: ./app/backend
+      dockerfile: Dockerfile
+    image: agent4da/app-api:0.1.0
+    container_name: app-api
+    restart: unless-stopped
+
+    env_file:
+      - ./envs/app.env
+      - path: ./envs/groq.env
+        required: false
+      - path: ./envs/postgre.env
+        required: false
+      - path: ./envs/minio.env
+        required: false
+
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+
+    # The backend imports the existing LangGraph agent in later phases via
+    # PYTHONPATH=/opt/project/code/agent. Mount the host repo's code/ tree
+    # read-only so we don't duplicate the agent into the image.
+    volumes:
+      - ./code:/opt/project/code:ro
+      - ./envs:/envs:ro
+
+    ports:
+      # Keep 8081 free for the existing Airflow UI.
+      - "8083:8000"
+
+    networks:
+      - data_network
+
+    # Postgres and Trino are managed by other compose files; the backend
+    # only depends on them at runtime. Phase 1 does not require them to be
+    # up to serve /healthz, so we do not put depends_on here.
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=2).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  app-web:
+    build:
+      context: ./app/frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8083
+    image: agent4da/app-web:0.1.0
+    container_name: app-web
+    restart: unless-stopped
+
+    environment:
+      # NEXT_PUBLIC_* are baked at build time; this value is for SSR fetches
+      # and gets re-read at runtime via process.env.
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:8083
+      HOSTNAME: 0.0.0.0
+      NODE_ENV: production
+
+    ports:
+      - "3000:3000"
+
+    networks:
+      - data_network
+
+    depends_on:
+      app-api:
+        condition: service_healthy
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/ask"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  data_network:
+    external: true
+    name: data_network

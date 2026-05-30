@@ -18,6 +18,10 @@ set -e
 
 log() { echo "[entrypoint] $*"; }
 
+export _AIRFLOW_WWW_USER_USERNAME="${_AIRFLOW_WWW_USER_USERNAME:-${APP_AIRFLOW_USER:-admin}}"
+export _AIRFLOW_WWW_USER_PASSWORD="${_AIRFLOW_WWW_USER_PASSWORD:-${APP_AIRFLOW_PASSWORD:-change_me}}"
+export AIRFLOW__DATABASE__SQL_ALCHEMY_CONN="${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN:-postgresql+psycopg2://${AIRFLOW_DB_USER:?Missing AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD:?Missing AIRFLOW_DB_PASSWORD}@postgres-db:5432/${POSTGRES_DB:-agent4da}?options=-csearch_path%3Dairflow}"
+
 # ---------------------------------------------------------------------------
 # Trap: khi container nhận SIGTERM/SIGINT → kill tất cả child processes
 # ---------------------------------------------------------------------------

@@ -290,7 +290,7 @@ def generate_insight(
 ) -> dict[str, Any]:
     if intent == "unsupported":
         return {
-            "answer": "Câu hỏi này nằm ngoài phạm vi dữ liệu e-commerce Gold hiện tại.",
+            "answer": "Mình cần thêm ngữ cảnh để chuyển câu hỏi này thành phân tích dữ liệu e-commerce an toàn.",
             "insights": [],
         }
 
