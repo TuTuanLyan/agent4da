@@ -72,6 +72,12 @@ class Settings(BaseSettings):
         default=False, alias="APP_ALLOW_TEMPERATURE_OVERRIDE"
     )
 
+    # --- Agent engine -------------------------------------------------------
+    # Which text-to-SQL engine the backend runs. Environment-controlled; changing
+    # it requires recreating the backend container. Surfaced read-only in
+    # Settings via /settings/system.
+    agent_engine: str = Field(default="legacy", alias="APP_AGENT_ENGINE")
+
     # --- Background jobs ----------------------------------------------------
     enable_scheduler: bool = Field(default=True, alias="APP_ENABLE_SCHEDULER")
 
@@ -96,6 +102,7 @@ class Settings(BaseSettings):
 
         Used by /settings/system in later phases. Never returns secret values.
         """
+        engine = self.agent_engine.strip().lower()
         return {
             "trino": "configured" if self.trino_host else "missing",
             "airflow": "configured" if self.airflow_user else "missing",
@@ -103,6 +110,7 @@ class Settings(BaseSettings):
             "groq": "configured" if self.groq_api_key else "missing",
             "allow_temperature_override": self.allow_temperature_override,
             "model_whitelist": self.model_whitelist_list,
+            "agent_engine": "v2" if engine == "v2" else "legacy",
         }
 
 

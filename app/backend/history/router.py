@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from agent.schemas import AskKeyNumber, AskResponse, ChartSuggestion
+from agent.schemas import AskKeyNumber, AskResponse, ChartSuggestion, ClarificationSuggestion
 from auth.deps import current_user
 from db.base import get_db
 from db.models import QueryRun, User
@@ -162,6 +162,15 @@ def _to_ask_response(run: QueryRun) -> AskResponse:
         if isinstance(run.chart_suggestion, dict)
         else None
     )
+    trace = run.agent_trace if isinstance(run.agent_trace, dict) else {}
+    clarification_suggestions = []
+    for item in trace.get("clarification_suggestions") or []:
+        if not isinstance(item, dict):
+            continue
+        try:
+            clarification_suggestions.append(ClarificationSuggestion(**item))
+        except Exception:
+            continue
     return AskResponse(
         run_id=run.id,
         question=run.question,
@@ -173,9 +182,31 @@ def _to_ask_response(run: QueryRun) -> AskResponse:
         error=run.error,
         latency_ms=run.latency_ms,
         summary=run.summary_text,
+        answer=run.summary_text,
+        insights=list(run.insights or []),
         key_numbers=key_numbers,
         chart_suggestion=chart_suggestion,
+        agent_engine=run.agent_engine or "legacy",
+        chart_type=run.chart_type,
+        chart=run.chart_payload if isinstance(run.chart_payload, dict) else None,
+        chart_data=list(run.chart_data or []),
+        retry_count=run.retry_count,
+        model_used=run.model_used,
+        intent=trace.get("intent"),
+        used_tables=list(trace.get("used_tables") or []),
+        warnings=list(trace.get("warnings") or []),
+        validation_notes=list(trace.get("validation_notes") or []),
+        confidence=trace.get("confidence"),
+        context_used=bool(trace.get("context_used")),
+        resolved_question=trace.get("resolved_question"),
+        agent_trace=run.agent_trace if isinstance(run.agent_trace, dict) else None,
+        answer_type=trace.get("answer_type") or "answer",
+        needs_clarification=bool(trace.get("needs_clarification")),
+        clarification_suggestions=clarification_suggestions,
+        assumptions=list(trace.get("assumptions") or []),
         status=run.status,  # type: ignore[arg-type]
+        session_id=run.session_id,
+        turn_index=run.turn_index,
         created_at=run.created_at,
     )
 

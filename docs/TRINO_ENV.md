@@ -41,8 +41,8 @@ Trong Trino CLI, catalog Iceberg la `iceberg` vi file runtime ten `iceberg.prope
 Iceberg JDBC catalog name van la `iceberg_catalog` de khop voi Spark.
 
 ```sql
-SELECT table_name, table_type, description, grain
-FROM iceberg.metadata.table_catalog
+SELECT table_name, display_name, purpose, grain
+FROM iceberg.metadata.semantic_table_catalog
 ORDER BY table_name;
 
 SELECT * FROM iceberg.gold.daily_event_summary LIMIT 10;
@@ -62,4 +62,4 @@ Trino 453+ default JDBC catalog schema-version la `V1`, trong khi Spark/Iceberg 
 iceberg.jdbc-catalog.schema-version=V0
 ```
 
-Voi Trino 481 va schema-version `V0`, `SELECT` co the chay binh thuong, nhung `SHOW TABLES FROM iceberg.gold` co the gap loi view support. De list table cho Agent, dung `iceberg.metadata.table_catalog`.
+Voi Trino 481 va schema-version `V0`, `SELECT` co the chay binh thuong, nhung `SHOW TABLES FROM iceberg.gold` co the gap loi view support. De list table cho Agent, dung `iceberg.metadata.semantic_table_catalog`.

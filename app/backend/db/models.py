@@ -127,6 +127,36 @@ class UserPreferences(Base):
     user: Mapped[User] = relationship(back_populates="preferences")
 
 
+class ChatSession(Base):
+    """A conversation thread on the Ask page.
+
+    Successive Ask runs that share a session let the agent use earlier turns as
+    follow-up context. Deleting a session keeps its `query_runs` rows (the FK on
+    `query_runs.session_id` is ON DELETE SET NULL), so history is preserved.
+    """
+
+    __tablename__ = "chat_sessions"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    title: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    is_pinned: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false", index=True
+    )
+    pinned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_used_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+
 class QueryRun(Base):
     __tablename__ = "query_runs"
     __table_args__ = (
@@ -151,6 +181,15 @@ class QueryRun(Base):
         nullable=False,
         index=True,
     )
+    # A run may belong to a chat session. SET NULL on delete so removing a chat
+    # keeps the run in History (just detached from the thread).
+    session_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.chat_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    turn_index: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     generated_sql: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     guard_status: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
@@ -158,12 +197,24 @@ class QueryRun(Base):
     latency_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     summary_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    insights: Mapped[Optional[List[Any]]] = mapped_column(JSONB, nullable=True)
     key_numbers: Mapped[Optional[List[Any]]] = mapped_column(JSONB, nullable=True)
     chart_type: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
     chart_suggestion: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     columns: Mapped[Optional[List[Any]]] = mapped_column(JSONB, nullable=True)
     result_json: Mapped[Optional[List[Any]]] = mapped_column(JSONB, nullable=True)
     trino_query_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # --- Agent v2 columns (migration 0007_agent_v2) ------------------------
+    # Full chart recommendation dict + the small (<=20 row) chart series the
+    # frontend renders; the agent trace holds NLU/metadata/retry/context info.
+    chart_payload: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    chart_data: Mapped[Optional[List[Any]]] = mapped_column(JSONB, nullable=True)
+    agent_trace: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    retry_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    model_used: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    agent_engine: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="legacy", server_default="legacy"
+    )
     is_favorite: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default="false"
     )
@@ -238,4 +289,95 @@ class LayerStat(Base):
     detail: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
     measured_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+
+
+class AgentCheckpointSnapshot(Base):
+    """Compact final-state snapshot written after each v2 agent run.
+
+    Replaces the langgraph Postgres saver (not installed) with a durable record
+    of the conversation thread state per turn. Keyed by thread_id (the chat
+    session id) and a per-turn checkpoint_id.
+    """
+
+    __tablename__ = "agent_checkpoint_snapshots"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    thread_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    checkpoint_id: Mapped[str] = mapped_column(String(160), nullable=False)
+    state_data: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AgentFeedback(Base):
+    """User feedback and suggestion clicks for contextual learning."""
+
+    __tablename__ = "agent_feedback"
+    __table_args__ = (
+        CheckConstraint(
+            "feedback_type in ('positive','negative','suggestion_click','free_text')",
+            name="agent_feedback_type_check",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    session_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.chat_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.query_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    feedback_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    selected_suggestion: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    free_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class AgentSuggestionEvent(Base):
+    """Suggestions generated for a run, plus optional clicked suggestion."""
+
+    __tablename__ = "agent_suggestion_events"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    session_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.chat_sessions.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    run_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("app.query_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    input_question: Mapped[str] = mapped_column(Text, nullable=False)
+    intent: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    suggestions_generated: Mapped[List[Any]] = mapped_column(JSONB, nullable=False)
+    selected_suggestion: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True)
+    result_status: Mapped[Optional[str]] = mapped_column(String(16), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
     )

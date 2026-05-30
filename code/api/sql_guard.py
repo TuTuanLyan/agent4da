@@ -25,7 +25,13 @@ ALLOWED_TABLE_SPECS = {
     for table in sorted(ALLOWED_TABLE_NAMES)
 }
 ALLOWED_TABLES = set(ALLOWED_TABLE_SPECS)
+SEMANTIC_TABLE_CATALOG = f"{GOLD_CATALOG}.metadata.semantic_table_catalog"
+SEMANTIC_COLUMN_CATALOG = f"{GOLD_CATALOG}.metadata.semantic_column_catalog"
 ALLOWED_METADATA_TABLES = {
+    SEMANTIC_TABLE_CATALOG,
+    SEMANTIC_COLUMN_CATALOG,
+}
+LEGACY_METADATA_TABLES = {
     f"{GOLD_CATALOG}.information_schema.tables",
     f"{GOLD_CATALOG}.information_schema.columns",
 }
@@ -112,6 +118,44 @@ def _is_aggregate_query(sql: str) -> bool:
     )
 
 
+def _metadata_tables_sql() -> str:
+    table_expr = (
+        f"CASE WHEN starts_with(table_name, '{GOLD_SCHEMA}.') "
+        f"THEN substr(table_name, {len(GOLD_SCHEMA) + 2}) "
+        "ELSE table_name END"
+    )
+    return (
+        f"SELECT {table_expr} AS table_name "
+        f"FROM {SEMANTIC_TABLE_CATALOG} "
+        "WHERE is_agent_visible = true "
+        "ORDER BY table_name"
+    )
+
+
+def _metadata_columns_sql(table_name: str | None = None) -> str:
+    if table_name:
+        qualified_table_name = f"{GOLD_SCHEMA}.{table_name}"
+        return (
+            "SELECT DISTINCT column_name, data_type "
+            f"FROM {SEMANTIC_COLUMN_CATALOG} "
+            "WHERE is_agent_visible = true "
+            f"AND table_name IN ('{table_name}', '{qualified_table_name}') "
+            "ORDER BY column_name"
+        )
+    table_expr = (
+        f"CASE WHEN starts_with(table_name, '{GOLD_SCHEMA}.') "
+        f"THEN substr(table_name, {len(GOLD_SCHEMA) + 2}) "
+        "ELSE table_name END"
+    )
+    return (
+        f"SELECT DISTINCT {table_expr} AS table_name, column_name, data_type "
+        f"FROM {SEMANTIC_COLUMN_CATALOG} "
+        "WHERE is_agent_visible = true "
+        "ORDER BY table_name, column_name "
+        "LIMIT 1000"
+    )
+
+
 def _validate_show_tables(sql: str) -> str | None:
     match = re.fullmatch(
         rf"SHOW\s+TABLES\s+FROM\s+{GOLD_CATALOG}\s*\.\s*{GOLD_SCHEMA}",
@@ -120,7 +164,7 @@ def _validate_show_tables(sql: str) -> str | None:
     )
     if not match:
         return None
-    return f"SHOW TABLES FROM {GOLD_CATALOG}.{GOLD_SCHEMA}"
+    return _metadata_tables_sql()
 
 
 def _validate_describe(sql: str) -> str | None:
@@ -141,34 +185,76 @@ def _validate_describe(sql: str) -> str | None:
 def _is_gold_schema_filter(sql: str) -> bool:
     return bool(
         re.search(
-            r"\btable_schema\s*=\s*'gold'",
+            rf"\btable_schema\s*=\s*'{re.escape(GOLD_SCHEMA)}'",
             sql,
             flags=re.IGNORECASE,
         )
     )
 
 
-def _validate_metadata_select(sql: str) -> bool:
-    compact_sql = re.sub(r"\s+", "", sql).lower()
-    metadata_refs = {table.lower() for table in ALLOWED_METADATA_TABLES}
-    if not any(table in compact_sql for table in metadata_refs):
-        return False
+def _has_agent_visible_filter(sql: str) -> bool:
+    return bool(re.search(r"\bis_agent_visible\s*=\s*true\b", sql, flags=re.IGNORECASE))
 
-    if not _is_gold_schema_filter(sql):
-        raise ValueError("Metadata queries must filter table_schema = 'gold'")
 
-    for table_name in re.findall(r"\btable_name\s*=\s*'([^']+)'", sql, flags=re.IGNORECASE):
-        if table_name.lower() not in ALLOWED_TABLE_NAMES:
-            raise ValueError(f"Table is not allowed: {table_name}")
+def _table_name_filters(sql: str) -> list[str]:
+    return re.findall(r"\btable_name\s*=\s*'([^']+)'", sql, flags=re.IGNORECASE)
 
-    allowed_refs = {table.lower() for table in ALLOWED_METADATA_TABLES}
+
+def _normalize_metadata_table_name(table_name: str) -> str:
+    normalized = table_name.lower()
+    schema_prefix = f"{GOLD_SCHEMA}."
+    if normalized.startswith(schema_prefix):
+        normalized = normalized[len(schema_prefix):]
+    if normalized not in ALLOWED_TABLE_NAMES:
+        raise ValueError(f"Table is not allowed: {table_name}")
+    return normalized
+
+
+def _validate_table_name_filters(sql: str) -> list[str]:
+    table_names = _table_name_filters(sql)
+    return [_normalize_metadata_table_name(table_name) for table_name in table_names]
+
+
+def _validate_metadata_refs(sql: str, allowed_tables: set[str]) -> None:
+    allowed_refs = {table.lower() for table in allowed_tables}
     allowed_refs.update(_extract_cte_names(sql))
     for table_ref in _find_table_refs(sql):
         normalized_ref = table_ref.lower()
         if normalized_ref not in allowed_refs:
             raise ValueError(f"Table is not allowed: {table_ref}")
 
-    return True
+
+def _validate_metadata_select(sql: str) -> str | None:
+    compact_sql = re.sub(r"\s+", "", sql).lower()
+
+    legacy_refs = {table.lower() for table in LEGACY_METADATA_TABLES}
+    if f"{GOLD_CATALOG}.information_schema.tables".lower() in compact_sql:
+        if not _is_gold_schema_filter(sql):
+            raise ValueError(f"Metadata queries must filter table_schema = '{GOLD_SCHEMA}'")
+        _validate_table_name_filters(sql)
+        _validate_metadata_refs(sql, LEGACY_METADATA_TABLES)
+        return _metadata_tables_sql()
+
+    if f"{GOLD_CATALOG}.information_schema.columns".lower() in compact_sql:
+        if not _is_gold_schema_filter(sql):
+            raise ValueError(f"Metadata queries must filter table_schema = '{GOLD_SCHEMA}'")
+        table_names = _validate_table_name_filters(sql)
+        _validate_metadata_refs(sql, LEGACY_METADATA_TABLES)
+        return _metadata_columns_sql(table_names[0]) if len(table_names) == 1 else _metadata_columns_sql()
+
+    metadata_refs = {table.lower() for table in ALLOWED_METADATA_TABLES}
+    if not any(table in compact_sql for table in metadata_refs | legacy_refs):
+        return None
+
+    if not _has_agent_visible_filter(sql):
+        raise ValueError("Semantic metadata queries must filter is_agent_visible = true")
+
+    _validate_table_name_filters(sql)
+    _validate_metadata_refs(sql, ALLOWED_METADATA_TABLES)
+
+    if not re.search(r"\bLIMIT\b", sql, flags=re.IGNORECASE):
+        sql = f"{sql} LIMIT 100"
+    return sql
 
 
 def validate_sql(sql: str) -> str:
@@ -201,10 +287,9 @@ def validate_sql(sql: str) -> str:
     sql = _normalize_table_refs(sql)
     compact_sql = re.sub(r"\s+", "", sql).lower()
 
-    if _validate_metadata_select(sql):
-        if not re.search(r"\bLIMIT\b", sql, flags=re.IGNORECASE):
-            sql = f"{sql} LIMIT 100"
-        return sql
+    metadata_sql = _validate_metadata_select(sql)
+    if metadata_sql:
+        return metadata_sql
 
     if not any(table in compact_sql for table in ALLOWED_TABLES):
         allowed = ", ".join(sorted(ALLOWED_TABLES))

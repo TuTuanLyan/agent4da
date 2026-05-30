@@ -29,6 +29,7 @@ from agent.router import router as agent_router
 from auth.router import router as auth_router
 from catalog.router import router as catalog_router
 from history.router import router as history_router
+from metrics.router import router as metrics_router
 from ops.health import router as ops_router
 from ops.scheduler import start_scheduler, stop_scheduler
 from pipelines.router import router as pipelines_router
@@ -70,7 +71,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
         allow_headers=["*"],
         expose_headers=["X-Request-ID"],
     )
@@ -128,6 +129,7 @@ def create_app() -> FastAPI:
     # Phase 5 routers.
     app.include_router(catalog_router)
     app.include_router(quickstats_router)
+    app.include_router(metrics_router)
 
     # Phase 6 routers.
     app.include_router(pipelines_router)

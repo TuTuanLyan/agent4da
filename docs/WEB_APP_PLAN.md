@@ -1002,8 +1002,8 @@ Three breakpoints: mobile (< 768), tablet (768-1023), desktop (>=1024).
 | --- | --- |
 | Login | `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me` |
 | Ask: sample chips | `GET /agent/sample-questions` |
-| Ask: quick stats | `GET /quickstats` |
-| Ask: run | `GET /agent/stream?question=...` (SSE) or `POST /agent/ask` |
+| Ask: chat sessions | `GET/POST /agent/sessions`, `GET /agent/sessions/current`, `GET /agent/sessions/{id}/runs`, `DELETE /agent/sessions/{id}` |
+| Ask: run | `GET /agent/stream?question=...&session_id=...` (SSE) or `POST /agent/ask` `{question, session_id}` |
 | Ask: stop | `POST /agent/stop` `{run_id}` |
 | Ask: export CSV | `GET /agent/runs/{run_id}/export.csv?token=...` |
 | Ask: save (favorite) | `POST /history/{run_id}/favorite` |

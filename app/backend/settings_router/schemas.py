@@ -32,3 +32,4 @@ class SystemStatusResponse(BaseModel):
     groq: Literal["configured", "missing"]
     allow_temperature_override: bool
     model_whitelist: List[str]
+    agent_engine: Literal["legacy", "v2"] = "legacy"

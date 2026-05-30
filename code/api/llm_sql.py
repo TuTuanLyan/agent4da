@@ -8,6 +8,10 @@ from groq import Groq
 load_dotenv()
 
 DEFAULT_MODEL = "llama-3.1-8b-instant"
+GOLD_CATALOG = "iceberg_catalog"
+GOLD_SCHEMA = "gold"
+SEMANTIC_TABLE_CATALOG = f"{GOLD_CATALOG}.metadata.semantic_table_catalog"
+SEMANTIC_COLUMN_CATALOG = f"{GOLD_CATALOG}.metadata.semantic_column_catalog"
 GOLD_TABLES = [
     "daily_brand_summary",
     "daily_category_summary",
@@ -73,9 +77,9 @@ gold_processed_at
 Business rules:
 - The real Gold catalog/schema is iceberg_catalog.gold. Do not use any other catalog or schema.
 - Metadata questions are allowed and should use:
-  SHOW TABLES FROM iceberg_catalog.gold
-  or SELECT table_name FROM iceberg_catalog.information_schema.tables WHERE table_schema = 'gold'
-  or SELECT column_name, data_type FROM iceberg_catalog.information_schema.columns WHERE table_schema = 'gold' AND table_name = '<table>'.
+  SELECT table_name FROM iceberg_catalog.metadata.semantic_table_catalog WHERE is_agent_visible = true ORDER BY table_name
+  or SELECT column_name, data_type FROM iceberg_catalog.metadata.semantic_column_catalog WHERE is_agent_visible = true AND table_name = '<table>' ORDER BY column_name.
+- Do not use SHOW TABLES or iceberg_catalog.information_schema for metadata questions.
 - Prefer Gold summary tables. Do not query Bronze or Silver unless the user explicitly asks to debug data quality or the pipeline.
 - Daily aggregate questions use daily_event_summary.
 - Brand questions use daily_brand_summary.
@@ -180,7 +184,17 @@ def _metadata_sql_for_question(question: str) -> str | None:
         or ("gold" in normalized and "tables" in normalized)
     )
     if asks_for_tables:
-        return "SHOW TABLES FROM iceberg_catalog.gold"
+        table_expr = (
+            f"CASE WHEN starts_with(table_name, '{GOLD_SCHEMA}.') "
+            f"THEN substr(table_name, {len(GOLD_SCHEMA) + 2}) "
+            "ELSE table_name END"
+        )
+        return (
+            f"SELECT {table_expr} AS table_name "
+            f"FROM {SEMANTIC_TABLE_CATALOG} "
+            "WHERE is_agent_visible = true "
+            "ORDER BY table_name"
+        )
 
     asks_for_columns = (
         "cột" in normalized
@@ -191,12 +205,13 @@ def _metadata_sql_for_question(question: str) -> str | None:
     if asks_for_columns:
         for table in GOLD_TABLES:
             if table in normalized:
+                qualified_table_name = f"{GOLD_SCHEMA}.{table}"
                 return (
-                    "SELECT column_name, data_type "
-                    "FROM iceberg_catalog.information_schema.columns "
-                    "WHERE table_schema = 'gold' "
-                    f"AND table_name = '{table}' "
-                    "ORDER BY ordinal_position"
+                    "SELECT DISTINCT column_name, data_type "
+                    f"FROM {SEMANTIC_COLUMN_CATALOG} "
+                    "WHERE is_agent_visible = true "
+                    f"AND table_name IN ('{table}', '{qualified_table_name}') "
+                    "ORDER BY column_name"
                 )
 
     return None

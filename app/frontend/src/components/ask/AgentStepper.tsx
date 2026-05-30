@@ -20,17 +20,18 @@ interface Props {
   steps: Record<AgentStepName, AgentStepStatus>;
 }
 
+// Business-friendly labels (PDF flow) rather than internal node names.
 const STEP_META: Array<{
   name: AgentStepName;
   label: string;
   icon: LucideIcon;
 }> = [
-  { name: "load_metadata", label: "Load metadata", icon: Database },
-  { name: "build_prompt", label: "Build prompt", icon: FileCode },
-  { name: "generate_sql", label: "Generate SQL", icon: FileCode },
-  { name: "guard_sql", label: "Validate SQL", icon: ShieldCheck },
-  { name: "execute_sql", label: "Execute", icon: Play },
-  { name: "summarize", label: "Summarize", icon: Sparkles },
+  { name: "load_metadata", label: "Đọc lược đồ dữ liệu", icon: Database },
+  { name: "build_prompt", label: "Hiểu yêu cầu", icon: FileCode },
+  { name: "generate_sql", label: "Tạo câu truy vấn", icon: FileCode },
+  { name: "guard_sql", label: "Kiểm tra truy vấn", icon: ShieldCheck },
+  { name: "execute_sql", label: "Truy vấn dữ liệu", icon: Play },
+  { name: "summarize", label: "Phân tích & biểu đồ", icon: Sparkles },
 ];
 
 function statusIcon(status: AgentStepStatus) {
@@ -59,12 +60,12 @@ export function AgentStepper({ steps }: Props) {
         return (
           <li
             key={name}
-            className="flex flex-1 items-center gap-2"
+            className="flex min-w-0 flex-1 items-center gap-2"
             aria-label={`${label}: ${status}`}
           >
             <span
               className={cn(
-                "inline-flex h-6 w-6 items-center justify-center rounded-full border border-border bg-background",
+                "inline-flex h-6 w-6 shrink-0 aspect-square items-center justify-center rounded-full border border-border bg-background",
                 status === "running" && "border-accent/50",
                 status === "ok" && "border-success/40 bg-success/10",
                 status === "error" && "border-error/40 bg-error/10",

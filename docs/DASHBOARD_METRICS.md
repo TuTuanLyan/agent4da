@@ -340,7 +340,10 @@ Chay cac query nay truoc khi ban giao cho BE/FE hoac truoc demo.
 ### Table Availability
 
 ```sql
-SHOW TABLES FROM iceberg.gold;
+SELECT table_name
+FROM iceberg.metadata.semantic_table_catalog
+WHERE is_agent_visible = true
+ORDER BY table_name;
 ```
 
 Expected tables:

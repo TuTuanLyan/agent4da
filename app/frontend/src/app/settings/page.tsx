@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bot,
   CheckCircle2,
+  Cpu,
   Languages,
   Palette,
   PlugZap,
@@ -27,6 +28,7 @@ interface SystemStatus {
   groq: SystemConfigured;
   allow_temperature_override: boolean;
   model_whitelist: string[];
+  agent_engine: "legacy" | "v2";
 }
 
 const THEME_OPTIONS: Array<{
@@ -197,8 +199,8 @@ export default function SettingsPage() {
       </SettingsSection>
 
       <SettingsSection
-        title="Model"
-        description="The provider is locked to Groq for V1. Temperature stays fixed at 0 unless the backend enables overrides."
+        title="Model & Agent"
+        description="The provider is locked to Groq for V1. Temperature stays fixed at 0 unless the backend enables overrides. The agent engine is controlled by backend env."
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
           <ReadOnlyField icon={Bot} label="Provider" value="Groq" />
@@ -228,7 +230,23 @@ export default function SettingsPage() {
             label="Temperature"
             value={system?.allow_temperature_override ? "0 (override allowed)" : "0 (locked)"}
           />
+          <ReadOnlyField
+            icon={Cpu}
+            label="Agent engine"
+            value={
+              systemLoading
+                ? "Loading..."
+                : system?.agent_engine === "v2"
+                  ? "Agent v2"
+                  : "Agent (legacy)"
+            }
+          />
         </div>
+        <p className="mt-3 text-xs text-text-secondary">
+          The agent engine is set by the backend environment variable{" "}
+          <code className="rounded bg-elevated px-1 py-0.5">APP_AGENT_ENGINE</code> and is
+          read-only here. Changing it requires recreating the backend container.
+        </p>
       </SettingsSection>
 
       <SettingsSection

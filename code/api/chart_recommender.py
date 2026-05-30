@@ -285,7 +285,7 @@ def recommend_chart(
     warnings: list[str],
 ) -> dict[str, Any]:
     if intent in {"metadata_tables", "metadata_columns", "unsupported"}:
-        return _empty_chart("Metadata hoặc câu hỏi ngoài phạm vi nên hiển thị dạng bảng/text.")
+        return _empty_chart("Metadata hoặc câu hỏi cần làm rõ nên hiển thị dạng bảng/text.")
 
     if intent == "drilldown":
         return _empty_chart("Detail rows are better displayed as a table.")

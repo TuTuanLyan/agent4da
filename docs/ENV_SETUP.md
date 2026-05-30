@@ -89,7 +89,13 @@ APP_MINIO_ENDPOINT=http://minio:9000
 APP_GROQ_MODEL_WHITELIST=llama-3.3-70b-versatile,llama-3.1-8b-instant
 APP_ALLOW_TEMPERATURE_OVERRIDE=false
 APP_AGENT_SQL_REPAIR=false
+APP_AGENT_ENGINE=legacy
 ```
+
+`APP_AGENT_ENGINE` selects the text-to-SQL engine the backend runs (`legacy` is
+the only engine shipped in this tree). It is read-only in the UI and surfaced on
+the Settings "Model & Agent" card via `GET /settings/system.agent_engine`.
+Changing it requires recreating the backend container.
 
 ## Files
 

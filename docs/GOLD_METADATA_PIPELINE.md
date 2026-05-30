@@ -49,19 +49,15 @@ metric base table sai, hoac join key khong ton tai.
 Logical tables:
 
 ```text
-iceberg_catalog.metadata.table_catalog
-iceberg_catalog.metadata.column_catalog
-iceberg_catalog.metadata.metric_catalog
-iceberg_catalog.metadata.join_catalog
+iceberg_catalog.metadata.semantic_table_catalog
+iceberg_catalog.metadata.semantic_column_catalog
 ```
 
 Physical locations:
 
 ```text
-s3a://gold/metadata/table_catalog
-s3a://gold/metadata/column_catalog
-s3a://gold/metadata/metric_catalog
-s3a://gold/metadata/join_catalog
+s3a://gold/metadata/semantic_table_catalog
+s3a://gold/metadata/semantic_column_catalog
 ```
 
 Namespace duoc tao bang:
@@ -80,18 +76,12 @@ set `MINIO_BUCKET_GOLD` hoac `GOLD_STORAGE_ROOT`; chi tiet xem
 
 ## 6. Noi dung tung bang
 
-`table_catalog` mo ta bang: layer, table type, business name, description, grain,
-primary/unique key, visibility va recommendation cho Agent.
+`semantic_table_catalog` mo ta bang: ten hien thi, muc dich, grain, cach dung,
+ghi chu query va visibility cho Agent.
 
-`column_catalog` mo ta cot theo schema that doc tu Spark/Iceberg, sau do merge
-business overrides: business name, description, source, transformation logic,
-flags metric/dimension/time/join/unique, allowed values va synonyms.
-
-`metric_catalog` mo ta metric chuan: formula SQL ngan, base table mac dinh,
-time column mac dinh, aggregation type, unit va example question tieng Viet.
-
-`join_catalog` chi chua cac join an toan, ro, hay dung giua facts, dimensions va
-summary tables.
+`semantic_column_catalog` mo ta cot theo schema that doc tu Spark/Iceberg, sau
+do merge business overrides: meaning, business terms, example usage va
+visibility cho Agent.
 
 ## 7. Khi nao can trigger lai
 
@@ -194,29 +184,23 @@ Notebook:
 Da them/can co cac cell:
 
 ```python
-spark.table("iceberg_catalog.metadata.table_catalog").show(100, truncate=False)
-spark.table("iceberg_catalog.metadata.column_catalog").show(100, truncate=False)
-spark.table("iceberg_catalog.metadata.metric_catalog").show(100, truncate=False)
-spark.table("iceberg_catalog.metadata.join_catalog").show(100, truncate=False)
+spark.table("iceberg_catalog.metadata.semantic_table_catalog").show(100, truncate=False)
+spark.table("iceberg_catalog.metadata.semantic_column_catalog").show(100, truncate=False)
 ```
 
 Vi du query:
 
 ```sql
-SELECT table_name, description, grain
-FROM iceberg_catalog.metadata.table_catalog
-WHERE recommended_for_agent = true
+SELECT table_name, display_name, purpose, grain
+FROM iceberg_catalog.metadata.semantic_table_catalog
+WHERE is_agent_visible = true
 ```
 
 ```sql
-SELECT column_name, business_name, description, agent_synonyms
-FROM iceberg_catalog.metadata.column_catalog
-WHERE table_name = 'gold.daily_product_summary'
-```
-
-```sql
-SELECT metric_name, formula_sql, base_table, example_question
-FROM iceberg_catalog.metadata.metric_catalog
+SELECT column_name, meaning, business_terms, example_usage
+FROM iceberg_catalog.metadata.semantic_column_catalog
+WHERE is_agent_visible = true
+  AND table_name IN ('daily_product_summary', 'gold.daily_product_summary')
 ```
 
 ## 11. JAR/dependency

@@ -88,14 +88,14 @@ Can full refresh/recreate bang de Iceberg metadata tro sang:
 Co the kiem tra bang Spark SQL hoac Trino SQL:
 
 ```sql
-SELECT * FROM iceberg.metadata.table_catalog LIMIT 10;
+SELECT * FROM iceberg.metadata.semantic_table_catalog LIMIT 10;
 SELECT * FROM iceberg.gold.daily_event_summary LIMIT 10;
 ```
 
 List semantic tables cho Agent:
 
 ```sql
-SELECT table_name, table_type, description, grain
-FROM iceberg.metadata.table_catalog
+SELECT table_name, display_name, purpose, grain
+FROM iceberg.metadata.semantic_table_catalog
 ORDER BY table_name;
 ```

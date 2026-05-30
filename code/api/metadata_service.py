@@ -9,6 +9,8 @@ GOLD_CATALOG = "iceberg_catalog"
 GOLD_SCHEMA = "gold"
 CACHE_TTL_SECONDS = 300
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SEMANTIC_TABLE_CATALOG = f"{GOLD_CATALOG}.metadata.semantic_table_catalog"
+SEMANTIC_COLUMN_CATALOG = f"{GOLD_CATALOG}.metadata.semantic_column_catalog"
 _CACHE: dict[str, Any] = {
     "expires_at": 0.0,
     "metadata": None,
@@ -17,28 +19,38 @@ _CACHE: dict[str, Any] = {
 
 def _validate_table_name(table_name: str) -> str:
     normalized = table_name.strip().lower()
+    schema_prefix = f"{GOLD_SCHEMA}."
+    if normalized.startswith(schema_prefix):
+        normalized = normalized[len(schema_prefix):]
     if not _IDENTIFIER_RE.fullmatch(normalized):
         raise ValueError(f"Invalid table name: {table_name}")
     return normalized
 
 
-def _first_value(row: dict[str, Any]) -> Any:
-    return next(iter(row.values()))
+def _semantic_table_names(table_name: str) -> tuple[str, str]:
+    table_name = _validate_table_name(table_name)
+    return table_name, f"{GOLD_SCHEMA}.{table_name}"
 
 
 def _fetch_gold_tables() -> list[str]:
-    _columns, rows = execute_query(f"SHOW TABLES FROM {GOLD_CATALOG}.{GOLD_SCHEMA}")
-    return sorted(str(_first_value(row)).lower() for row in rows)
+    sql = (
+        "SELECT table_name "
+        f"FROM {SEMANTIC_TABLE_CATALOG} "
+        "WHERE is_agent_visible = true "
+        "ORDER BY table_name"
+    )
+    _columns, rows = execute_query(sql)
+    return sorted({_validate_table_name(str(row["table_name"])) for row in rows})
 
 
 def _fetch_table_columns(table_name: str) -> list[dict[str, str]]:
-    table_name = _validate_table_name(table_name)
+    table_name, qualified_table_name = _semantic_table_names(table_name)
     sql = (
-        "SELECT column_name, data_type "
-        f"FROM {GOLD_CATALOG}.information_schema.columns "
-        f"WHERE table_schema = '{GOLD_SCHEMA}' "
-        f"AND table_name = '{table_name}' "
-        "ORDER BY ordinal_position"
+        "SELECT DISTINCT column_name, data_type "
+        f"FROM {SEMANTIC_COLUMN_CATALOG} "
+        "WHERE is_agent_visible = true "
+        f"AND table_name IN ('{table_name}', '{qualified_table_name}') "
+        "ORDER BY column_name"
     )
     _columns, rows = execute_query(sql)
     return [
@@ -87,7 +99,14 @@ def get_table_columns(table_name: str, refresh: bool = False) -> list[dict[str, 
 
 def select_metadata(table_candidates: list[str]) -> dict[str, Any]:
     metadata = get_gold_metadata()
-    selected_tables = [table for table in table_candidates if table in metadata["tables"]]
+    selected_tables = []
+    for candidate in table_candidates:
+        try:
+            table = _validate_table_name(candidate)
+        except ValueError:
+            continue
+        if table in metadata["tables"] and table not in selected_tables:
+            selected_tables.append(table)
     return {
         "tables": selected_tables,
         "columns": {
