@@ -64,12 +64,27 @@ def _contains_dangerous_keyword(sql: str) -> bool:
 
 
 def _all_columns(metadata_context: dict[str, Any]) -> set[str]:
-    return {
+    technical_columns = {
         str(column["name"]).lower()
         for columns in metadata_context.get("columns", {}).values()
         for column in columns
         if column.get("name")
     }
+    semantic_columns = {
+        str(column.get("column_name") or column.get("name")).lower()
+        for columns in metadata_context.get("semantic_columns", {}).values()
+        for column in columns
+        if column.get("column_name") or column.get("name")
+    }
+    return technical_columns | semantic_columns
+
+
+def _semantic_columns(metadata_context: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        column
+        for columns in metadata_context.get("semantic_columns", {}).values()
+        for column in columns
+    ]
 
 
 def _format_allowed_schema(metadata_context: dict[str, Any], table_candidates: list[str]) -> str:
@@ -82,6 +97,16 @@ def _format_allowed_schema(metadata_context: dict[str, Any], table_candidates: l
             lines.append(f"- iceberg_catalog.gold.{table}({column_text})")
         else:
             lines.append(f"- iceberg_catalog.gold.{table}")
+        semantic_columns = metadata_context.get("semantic_columns", {}).get(table, [])
+        for column in semantic_columns:
+            lines.append(
+                "  - {name}: {meaning} Terms: {terms} Usage: {usage}".format(
+                    name=column.get("column_name") or column.get("name"),
+                    meaning=column.get("meaning") or "",
+                    terms=column.get("business_terms") or "",
+                    usage=column.get("example_usage") or "",
+                )
+            )
     return "\n".join(lines) if lines else "- iceberg_catalog.gold.<allowed_gold_table>"
 
 
@@ -153,6 +178,22 @@ def _best_column_replacement(missing_column: str, metadata_context: dict[str, An
     for candidate in COLUMN_FALLBACKS.get(missing_column, ()):
         if candidate in columns:
             return candidate
+
+    missing_tokens = set(re.findall(r"[a-z0-9]+", missing_column.lower()))
+    for column in _semantic_columns(metadata_context):
+        column_name = str(column.get("column_name") or column.get("name") or "").lower()
+        if not column_name:
+            continue
+        semantic_text = " ".join(
+            str(column.get(key) or "").lower()
+            for key in ("column_name", "meaning", "business_terms", "example_usage")
+        )
+        if missing_column in semantic_text:
+            return column_name
+        if missing_column.startswith("total_") and missing_column.removeprefix("total_") in semantic_text:
+            return column_name
+        if missing_tokens and missing_tokens.issubset(set(re.findall(r"[a-z0-9]+", semantic_text))):
+            return column_name
 
     if missing_column.startswith("total_"):
         without_prefix = missing_column.removeprefix("total_")

@@ -29,6 +29,10 @@ ALLOWED_METADATA_TABLES = {
     f"{GOLD_CATALOG}.information_schema.tables",
     f"{GOLD_CATALOG}.information_schema.columns",
 }
+ALLOWED_SEMANTIC_METADATA_TABLES = {
+    f"{GOLD_CATALOG}.metadata.semantic_table_catalog",
+    f"{GOLD_CATALOG}.metadata.semantic_column_catalog",
+}
 DISALLOWED_KEYWORDS = (
     "INSERT",
     "UPDATE",
@@ -151,22 +155,36 @@ def _is_gold_schema_filter(sql: str) -> bool:
 def _validate_metadata_select(sql: str) -> bool:
     compact_sql = re.sub(r"\s+", "", sql).lower()
     metadata_refs = {table.lower() for table in ALLOWED_METADATA_TABLES}
-    if not any(table in compact_sql for table in metadata_refs):
+    semantic_refs = {table.lower() for table in ALLOWED_SEMANTIC_METADATA_TABLES}
+    uses_information_schema = any(table in compact_sql for table in metadata_refs)
+    uses_semantic_metadata = any(table in compact_sql for table in semantic_refs)
+    if not uses_information_schema and not uses_semantic_metadata:
         return False
 
-    if not _is_gold_schema_filter(sql):
+    if uses_information_schema and not _is_gold_schema_filter(sql):
         raise ValueError("Metadata queries must filter table_schema = 'gold'")
 
     for table_name in re.findall(r"\btable_name\s*=\s*'([^']+)'", sql, flags=re.IGNORECASE):
-        if table_name.lower() not in ALLOWED_TABLE_NAMES:
+        normalized_table_name = table_name.lower()
+        if normalized_table_name.startswith(f"{GOLD_SCHEMA}."):
+            normalized_table_name = normalized_table_name.split(".", 1)[1]
+        if normalized_table_name not in ALLOWED_TABLE_NAMES:
             raise ValueError(f"Table is not allowed: {table_name}")
 
     allowed_refs = {table.lower() for table in ALLOWED_METADATA_TABLES}
+    allowed_refs.update(table.lower() for table in ALLOWED_SEMANTIC_METADATA_TABLES)
     allowed_refs.update(_extract_cte_names(sql))
     for table_ref in _find_table_refs(sql):
         normalized_ref = table_ref.lower()
         if normalized_ref not in allowed_refs:
             raise ValueError(f"Table is not allowed: {table_ref}")
+
+    if uses_semantic_metadata and not re.search(
+        r"\bis_agent_visible\s*=\s*(?:true|TRUE)\b",
+        sql,
+        flags=re.IGNORECASE,
+    ):
+        raise ValueError("Semantic metadata queries must filter is_agent_visible = true")
 
     return True
 

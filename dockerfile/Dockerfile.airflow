@@ -1,0 +1,42 @@
+# =============================================================================
+# Dockerfile.airflow
+# Base: apache/airflow:2.10.4
+# Thêm: Java 17, Spark runtime, psycopg2, spark provider
+# =============================================================================
+
+# Stage 1: lấy Spark runtime
+FROM spark:4.1.1-scala2.13-java17-python3-ubuntu AS spark
+
+# Stage 2: Airflow image
+FROM apache/airflow:2.10.4-python3.10
+
+USER root
+
+# Java 17 — cần để spark-submit chạy được từ trong container airflow
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends openjdk-17-jdk \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+# Copy toàn bộ Spark từ spark image (spark-submit, pyspark, conf, jars gốc)
+COPY --from=spark /opt/spark /opt/spark
+
+ENV SPARK_HOME=/opt/spark
+ENV PATH=$PATH:$SPARK_HOME/bin
+
+# Copy entrypoint — phải là root để chmod
+COPY dockerfile/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Trở lại user airflow (uid=50000) để pip install
+USER airflow
+
+RUN pip install --no-cache-dir \
+    apache-airflow-providers-apache-spark==4.10.0 \
+    apache-airflow-providers-postgres==5.12.0 \
+    psycopg2-binary==2.9.9 \
+    kafka-python-ng
+
+ENTRYPOINT ["/entrypoint.sh"]

@@ -102,7 +102,7 @@ def _format_schema_context(metadata_context: dict | None) -> str:
     if not metadata_context:
         return ""
 
-    lines = []
+    lines = ["TECHNICAL GOLD SCHEMA"]
     for table in metadata_context.get("tables", []):
         columns = metadata_context.get("columns", {}).get(table, [])
         column_text = ", ".join(
@@ -110,6 +110,34 @@ def _format_schema_context(metadata_context: dict | None) -> str:
             for column in columns
         )
         lines.append(f"- iceberg_catalog.gold.{table}({column_text})")
+
+    if metadata_context.get("semantic_available"):
+        lines.extend(["", "SEMANTIC BUSINESS METADATA"])
+        semantic_columns = metadata_context.get("semantic_columns", {})
+        for table in metadata_context.get("semantic_tables", []):
+            table_key = table.get("table_key") or str(table.get("table_name", "")).split(".")[-1]
+            lines.extend(
+                [
+                    f"Table: iceberg_catalog.gold.{table_key}",
+                    f"Display name: {table.get('display_name') or ''}",
+                    f"Purpose: {table.get('purpose') or ''}",
+                    f"Grain: {table.get('grain') or ''}",
+                    f"Use for: {table.get('use_for') or ''}",
+                    f"Query notes: {table.get('query_notes') or ''}",
+                    "Business columns:",
+                ]
+            )
+            for column in semantic_columns.get(table_key, []):
+                lines.append(
+                    "- {name} ({data_type}): {meaning} Terms: {terms} Usage: {usage}".format(
+                        name=column.get("column_name") or column.get("name"),
+                        data_type=column.get("data_type") or column.get("type") or "",
+                        meaning=column.get("meaning") or "",
+                        terms=column.get("business_terms") or "",
+                        usage=column.get("example_usage") or "",
+                    )
+                )
+            lines.append("")
     return "\n".join(lines)
 
 
@@ -151,6 +179,8 @@ Rules:
 - The real Gold catalog/schema is iceberg_catalog.gold. Do not use any other catalog or schema.
 - Never use postgresql.gold, analytics_test, Bronze, or Silver.
 - Prefer the selected table candidates above; do not introduce other tables unless absolutely necessary.
+- If semantic business metadata is provided, use its purpose, grain, use_for, query_notes, column meaning, business_terms, and example_usage to choose tables and columns.
+- Respect table grain. If a daily summary table has grain by event_date plus a dimension and the question asks for an overall ranking by that dimension, aggregate the metric with SUM and GROUP BY the dimension.
 - Brand questions should use daily_brand_summary when available.
 - Category questions should use daily_category_summary when available.
 - Product questions should use daily_product_summary when available.
