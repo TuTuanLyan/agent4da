@@ -11,7 +11,7 @@ from db_context import ensure_session, log_query
 from insight_generator import generate_insight, generate_llm_insight
 from intent_router import route_intent
 from llm_sql import generate_sql, resolve_applied_time_filter
-from metadata_service import get_gold_tables, get_table_columns, select_metadata
+from metadata_service import get_gold_metadata, get_gold_tables, get_table_columns, select_metadata
 from result_validator import validate_result
 from sql_corrector import MAX_SQL_RETRY_ATTEMPTS, correct_sql
 from sql_guard import validate_sql
@@ -47,6 +47,7 @@ class AgentState(TypedDict):
     intent_result: NotRequired[dict[str, Any]]
     metadata_used: NotRequired[dict[str, Any]]
     metadata_context: NotRequired[dict[str, Any]]
+    metadata_source: NotRequired[str]
     generated_sql: NotRequired[str]
     original_sql: NotRequired[str | None]
     failed_sql: NotRequired[str]
@@ -295,6 +296,7 @@ def _build_response(state: AgentState) -> dict[str, Any]:
         "limit": state.get("limit", 10),
         "needs_metadata": state.get("needs_metadata", False),
         "metadata_used": state.get("metadata_used") or {"tables": [], "columns": {}},
+        "metadata_source": state.get("metadata_source", "technical"),
         "retry_attempted": state.get("retry_attempted", False),
         "retry_success": state.get("retry_success", False),
         "retry_count": state.get("retry_count", 0),
@@ -336,8 +338,9 @@ def initialize_node(state: AgentState) -> AgentState:
         "needs_metadata": False,
         "limit": 10,
         "intent_result": {},
-        "metadata_used": {"tables": [], "columns": {}},
-        "metadata_context": {"tables": [], "columns": {}},
+        "metadata_used": {"tables": [], "columns": {}, "semantic_available": False, "semantic_tables": [], "semantic_columns": {}, "metadata_source": "technical"},
+        "metadata_context": {"tables": [], "columns": {}, "semantic_available": False, "semantic_tables": [], "semantic_columns": {}, "metadata_source": "technical"},
+        "metadata_source": "technical",
         "generated_sql": "",
         "original_sql": None,
         "failed_sql": "",
@@ -495,7 +498,12 @@ def intent_router_node(state: AgentState) -> AgentState:
 
 def metadata_node(state: AgentState) -> AgentState:
     metadata_context = select_metadata(state.get("table_candidates", []))
-    return {**state, "metadata_context": metadata_context, "metadata_used": metadata_context}
+    return {
+        **state,
+        "metadata_context": metadata_context,
+        "metadata_used": metadata_context,
+        "metadata_source": metadata_context.get("metadata_source", "technical"),
+    }
 
 
 def metadata_answer_node(state: AgentState) -> AgentState:
@@ -503,11 +511,78 @@ def metadata_answer_node(state: AgentState) -> AgentState:
     intent_result = state.get("intent_result", {})
     effective_question = state.get("effective_question") or state["question"]
 
+    if intent == "metadata_business":
+        metadata = get_gold_metadata()
+        semantic_available = bool(metadata.get("semantic_available"))
+        metadata_used = metadata
+        if semantic_available:
+            generated_sql = (
+                "SELECT table_name, display_name, purpose, grain, use_for, query_notes "
+                "FROM iceberg_catalog.metadata.semantic_table_catalog "
+                "WHERE is_agent_visible = true "
+                "ORDER BY table_name"
+            )
+            rows = [
+                {
+                    "table_name": table.get("table_name"),
+                    "display_name": table.get("display_name"),
+                    "purpose": table.get("purpose"),
+                    "grain": table.get("grain"),
+                    "use_for": table.get("use_for"),
+                    "query_notes": table.get("query_notes"),
+                }
+                for table in metadata.get("semantic_tables", [])
+            ]
+            answer = f"Semantic metadata hiện có {len(rows)} bảng business metadata trong dữ liệu hiện tại."
+            warnings = []
+            validation_notes = ["Loaded semantic metadata from iceberg_catalog.metadata semantic catalog tables."]
+        else:
+            generated_sql = "SHOW TABLES FROM iceberg_catalog.metadata"
+            rows = []
+            answer = "Semantic metadata chưa tồn tại trong Trino runtime; Agent đang fallback sang technical metadata từ information_schema."
+            warnings = ["Semantic metadata chưa tồn tại trong Trino runtime. Cần chạy Gold metadata pipeline trước để bật semantic path."]
+            validation_notes = ["Semantic metadata unavailable; technical metadata fallback remains active."]
+
+        chart = _empty_chart("Business metadata nên hiển thị dạng bảng/text.")
+        return {
+            **state,
+            "generated_sql": generated_sql,
+            "used_tables": _used_tables(generated_sql),
+            "rows": rows,
+            "row_count": len(rows),
+            "warnings": warnings,
+            "confidence": "high" if semantic_available else "medium",
+            "validation_notes": validation_notes,
+            "answer": answer,
+            "insights": [
+                "Semantic metadata gồm thông tin purpose, grain, use_for, query_notes và mô tả cột nếu runtime đã có.",
+                "Fallback technical metadata chỉ cho biết bảng/cột/data type, không mô tả ngữ nghĩa nghiệp vụ.",
+            ],
+            "insight_source": "rule_based",
+            "llm_insight_used": False,
+            "chart": chart,
+            "chart_type": None,
+            "chart_data": [],
+            "metadata_used": metadata_used,
+            "metadata_source": metadata.get("metadata_source", "technical"),
+            "status": "success",
+            "error_message": None,
+        }
+
     if intent == "metadata_tables":
         generated_sql = _metadata_tables_sql()
         tables = get_gold_tables()
         rows = [{"Table": table} for table in tables]
-        metadata_used = {"tables": tables, "columns": {}}
+        full_metadata = get_gold_metadata()
+        metadata_used = {
+            "tables": tables,
+            "columns": {},
+            "semantic_available": full_metadata.get("semantic_available", False),
+            "semantic_tables": full_metadata.get("semantic_tables", []),
+            "semantic_columns": {},
+            "metadata_source": full_metadata.get("metadata_source", "technical"),
+            "semantic_unavailable_reason": full_metadata.get("semantic_unavailable_reason"),
+        }
     else:
         table_name = intent_result.get("table_name")
         if not table_name:
@@ -515,7 +590,7 @@ def metadata_answer_node(state: AgentState) -> AgentState:
         generated_sql = _metadata_columns_sql(table_name)
         columns = get_table_columns(table_name)
         rows = [{"column_name": column["name"], "data_type": column["type"]} for column in columns]
-        metadata_used = {"tables": [table_name], "columns": {table_name: columns}}
+        metadata_used = select_metadata([table_name])
 
     used_tables = _used_tables(generated_sql)
     validation = validate_result(
@@ -563,6 +638,7 @@ def metadata_answer_node(state: AgentState) -> AgentState:
         "chart_type": _chart_type(chart),
         "chart_data": _chart_data(chart),
         "metadata_used": metadata_used,
+        "metadata_source": metadata_used.get("metadata_source", "technical"),
         "status": "success",
         "error_message": None,
     }
@@ -588,7 +664,8 @@ def assistive_clarification_node(state: AgentState) -> AgentState:
         "chart": _empty_chart("Câu hỏi cần làm rõ chưa có chart recommendation."),
         "chart_type": None,
         "chart_data": [],
-        "metadata_used": {"tables": [], "columns": {}},
+        "metadata_used": {"tables": [], "columns": {}, "semantic_available": False, "semantic_tables": [], "semantic_columns": {}, "metadata_source": "technical"},
+        "metadata_source": "technical",
         "status": "success",
         "error_message": None,
     }
@@ -847,7 +924,7 @@ def route_after_followup(state: AgentState) -> str:
 
 def route_after_intent(state: AgentState) -> str:
     intent = state.get("intent")
-    if intent in {"metadata_tables", "metadata_columns"}:
+    if intent in {"metadata_tables", "metadata_columns", "metadata_business"}:
         return "metadata_answer"
     if intent == "unsupported":
         return "assistive_clarification"
@@ -998,7 +1075,8 @@ def run_agent_graph(session_id: str, question: str, user_id: str | None = None) 
             "extracted_entities": {},
             "nlu_confidence": "low",
             "table_candidates": [],
-            "metadata_used": {"tables": [], "columns": {}},
+            "metadata_used": {"tables": [], "columns": {}, "semantic_available": False, "semantic_tables": [], "semantic_columns": {}, "metadata_source": "technical"},
+            "metadata_source": "technical",
             "retry_attempted": False,
             "retry_success": False,
             "retry_count": 0,

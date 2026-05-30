@@ -99,5 +99,5 @@ TRIGGERER_PID=$!
 # 5. Webserver — foreground (PID 1 equivalent, giữ container alive)
 # ---------------------------------------------------------------------------
 log "Starting webserver on port 8080..."
-log "=== Airflow UI: http://localhost:8081 ==="
+log "=== Airflow UI: ${AIRFLOW__WEBSERVER__BASE_URL:-http://localhost:8080} ==="
 exec airflow webserver --port 8080

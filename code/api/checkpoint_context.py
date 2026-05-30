@@ -127,6 +127,7 @@ def _state_snapshot(state: dict[str, Any]) -> dict[str, Any]:
         "nlu_confidence",
         "table_candidates",
         "metadata_used",
+        "metadata_source",
         "generated_sql",
         "original_sql",
         "used_tables",

@@ -250,6 +250,26 @@ def parse_nlu(question: str) -> dict[str, Any]:
         "comparison_entities": comparison_entities,
     }
 
+    asks_business_metadata = (
+        _contains_any(text, ("metadata", "semantic", "business metadata", "metadata business", "ngữ nghĩa", "ngu nghia", "nghiệp vụ", "nghiep vu"))
+        and _contains_any(text, ("bảng", "bang", "table", "tables", "nào", "nao", "có", "co", "hệ thống", "he thong"))
+    )
+    if asks_business_metadata:
+        return _base_result(
+            intent="metadata_business",
+            dimension=None,
+            metric=None,
+            table_candidates=[],
+            limit=limit,
+            needs_metadata=True,
+            table_name=None,
+            analysis_type="metadata",
+            time_range=time_range,
+            time_grain=time_grain,
+            sort_direction=sort_direction,
+            extracted_entities=extracted_entities,
+        )
+
     asks_gold_tables = (
         "bảng gold" in text
         or "bang gold" in text

@@ -35,6 +35,10 @@ LEGACY_METADATA_TABLES = {
     f"{GOLD_CATALOG}.information_schema.tables",
     f"{GOLD_CATALOG}.information_schema.columns",
 }
+ALLOWED_SEMANTIC_METADATA_TABLES = {
+    f"{GOLD_CATALOG}.metadata.semantic_table_catalog",
+    f"{GOLD_CATALOG}.metadata.semantic_column_catalog",
+}
 DISALLOWED_KEYWORDS = (
     "INSERT",
     "UPDATE",
@@ -192,6 +196,27 @@ def _is_gold_schema_filter(sql: str) -> bool:
     )
 
 
+def _validate_metadata_select(sql: str) -> bool:
+    compact_sql = re.sub(r"\s+", "", sql).lower()
+    metadata_refs = {table.lower() for table in ALLOWED_METADATA_TABLES}
+    semantic_refs = {table.lower() for table in ALLOWED_SEMANTIC_METADATA_TABLES}
+    uses_information_schema = any(table in compact_sql for table in metadata_refs)
+    uses_semantic_metadata = any(table in compact_sql for table in semantic_refs)
+    if not uses_information_schema and not uses_semantic_metadata:
+        return False
+
+    if uses_information_schema and not _is_gold_schema_filter(sql):
+        raise ValueError("Metadata queries must filter table_schema = 'gold'")
+
+    for table_name in re.findall(r"\btable_name\s*=\s*'([^']+)'", sql, flags=re.IGNORECASE):
+        normalized_table_name = table_name.lower()
+        if normalized_table_name.startswith(f"{GOLD_SCHEMA}."):
+            normalized_table_name = normalized_table_name.split(".", 1)[1]
+        if normalized_table_name not in ALLOWED_TABLE_NAMES:
+            raise ValueError(f"Table is not allowed: {table_name}")
+
+    allowed_refs = {table.lower() for table in ALLOWED_METADATA_TABLES}
+    allowed_refs.update(table.lower() for table in ALLOWED_SEMANTIC_METADATA_TABLES)
 def _has_agent_visible_filter(sql: str) -> bool:
     return bool(re.search(r"\bis_agent_visible\s*=\s*true\b", sql, flags=re.IGNORECASE))
 
@@ -223,6 +248,14 @@ def _validate_metadata_refs(sql: str, allowed_tables: set[str]) -> None:
         if normalized_ref not in allowed_refs:
             raise ValueError(f"Table is not allowed: {table_ref}")
 
+    if uses_semantic_metadata and not re.search(
+        r"\bis_agent_visible\s*=\s*(?:true|TRUE)\b",
+        sql,
+        flags=re.IGNORECASE,
+    ):
+        raise ValueError("Semantic metadata queries must filter is_agent_visible = true")
+
+    return True
 
 def _validate_metadata_select(sql: str) -> str | None:
     compact_sql = re.sub(r"\s+", "", sql).lower()
