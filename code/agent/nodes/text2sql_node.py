@@ -10,5 +10,6 @@ def generate_sql_node(state):
     return {
         "generated_sql": sql,
         "sql_attempts": attempts,
+        "requery_requested": False,
         "error": None,
     }

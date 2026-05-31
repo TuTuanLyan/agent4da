@@ -62,6 +62,8 @@ def execute_query(connection, query):
             cursor.close()
     
 def row_to_dict(cursor, row):
+    if cursor.description is None:
+        return {}
     names = [desc[0] for desc in cursor.description]
     return dict(zip(names, row))
 

@@ -1,5 +1,6 @@
 import re
 import unicodedata
+import os
 
 
 DESTRUCTIVE_QUESTION_TERMS = [
@@ -179,3 +180,16 @@ def validate_readonly_sql(sql):
         "reason": "SQL hợp lệ và chỉ đọc.",
         "category": "safe",
     }
+
+
+def has_limit_clause(sql):
+    searchable_sql = strip_comments_and_strings(sql).upper()
+    return re.search(r"\bLIMIT\b", searchable_sql) is not None
+
+
+def add_default_limit(sql, default_limit=None):
+    default_limit = int(default_limit or os.getenv("AGENT_DEFAULT_SQL_LIMIT", "100"))
+    if default_limit <= 0 or has_limit_clause(sql):
+        return sql
+
+    return f"{clean_sql(sql)}\nLIMIT {default_limit}"

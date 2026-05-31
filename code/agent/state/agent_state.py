@@ -4,6 +4,16 @@ class AgentState(TypedDict, total=False):
 
     user_question: str
 
+    request_id: Optional[str]
+
+    session_id: Optional[str]
+
+    user_id: Optional[str]
+
+    app_context: Optional[dict]
+
+    context_warning: Optional[str]
+
     safety: Optional[dict]
 
     schema_context: str
@@ -22,6 +32,10 @@ class AgentState(TypedDict, total=False):
 
     max_retries: int
 
+    requery_count: int
+
+    max_requery_rounds: int
+
     last_sql_error: Optional[str]
 
     sql_validation: Optional[dict]
@@ -30,13 +44,27 @@ class AgentState(TypedDict, total=False):
 
     result_profile: Optional[dict]
 
+    result_validation: Optional[dict]
+
+    requery_requested: bool
+
     chart_spec: Optional[dict]
+
+    chart_type_requested: Optional[str]
 
     insight_summary: Optional[str]
 
     insight_error: Optional[str]
 
     missing_info: Optional[dict]
+
+    answer_kind: Optional[str]
+
+    text_answer: Optional[str]
+
+    stop_reason: Optional[str]
+
+    stop_after_answerability: bool
 
     final_answer: Optional[dict]
 

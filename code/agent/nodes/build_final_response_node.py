@@ -1,5 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
+import os
 
 
 def make_json_ready(value):
@@ -33,10 +34,39 @@ def default_chart_spec():
 
 
 def build_result(rows, profile):
+    max_rows = int(os.getenv("AGENT_MAX_RESPONSE_ROWS", "100"))
+    is_truncated = len(rows) > max_rows
+    visible_rows = rows[:max_rows]
     return {
         "row_count": profile.get("row_count", len(rows)),
         "columns": profile.get("columns", []),
-        "rows": rows
+        "rows": visible_rows,
+        "is_truncated": is_truncated,
+    }
+
+
+def build_chart_suggestion(chart_spec, columns):
+    chart_type = chart_spec.get("chart_type") or chart_spec.get("type") or "none"
+    x_column = chart_spec.get("x")
+    y_column = chart_spec.get("y")
+
+    if x_column and x_column not in columns:
+        x_column = None
+    if y_column and y_column not in columns:
+        y_column = None
+
+    if chart_type not in ["bar", "line", "pie", "table", "scatter", "none"]:
+        chart_type = "table"
+
+    if chart_type in ["bar", "line", "pie", "scatter"] and (not x_column or not y_column):
+        chart_type = "table" if columns else "none"
+
+    return {
+        "chart_type": chart_type,
+        "x": x_column,
+        "y": y_column,
+        "title": chart_spec.get("title") or "",
+        "reason": chart_spec.get("reason") or "",
     }
 
 
@@ -109,10 +139,25 @@ def build_final_response_node(state):
     status = "error" if error else "success"
     result = build_result(rows, profile)
     result["missing_info"] = missing_info
+    chart_suggestion = build_chart_suggestion(chart_spec, result["columns"])
+    answer_kind = state.get("answer_kind")
+    if not answer_kind:
+        if error:
+            answer_kind = "error"
+        elif missing_info.get("has_missing_info") and not rows:
+            answer_kind = "no_data"
+        else:
+            answer_kind = "data_answer"
+    text_answer = state.get("text_answer") or insight_summary or error or ""
 
     final_answer = {
+        "request_id": state.get("request_id"),
+        "session_id": state.get("session_id"),
+        "user_id": state.get("user_id"),
         "status": status,
+        "answer_kind": answer_kind,
         "question": state.get("user_question") or "",
+        "text_answer": text_answer,
         "sql": sql,
         "readonly": True,
         "safety": make_json_ready(state.get("safety") or {}),
@@ -127,8 +172,10 @@ def build_final_response_node(state):
             "insight_summary": insight_summary,
             "insight_error": insight_error,
             "result_profile": profile,
+            "result_validation": make_json_ready(state.get("result_validation") or {}),
             "missing_info": missing_info
         },
+        "chart_suggestion": chart_suggestion,
         "visualization": {
             "chart_spec": chart_spec
         },
@@ -140,6 +187,10 @@ def build_final_response_node(state):
             result,
             sql
         ),
+        "context": {
+            "warning": state.get("context_warning"),
+            "stop_reason": state.get("stop_reason"),
+        },
         "error": error
     }
 

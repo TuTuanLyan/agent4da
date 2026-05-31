@@ -59,6 +59,7 @@ def add_duplicate_x_warning(chart_spec, rows):
 def none_chart(reason):
     return {
         "type": "none",
+        "chart_type": "none",
         "title": "Không có biểu đồ",
         "x": None,
         "y": None,
@@ -70,6 +71,7 @@ def none_chart(reason):
 def table_chart(rows, reason):
     return {
         "type": "table",
+        "chart_type": "table",
         "title": "Bảng dữ liệu kết quả",
         "x": None,
         "y": None,
@@ -105,6 +107,7 @@ def plan_chart_node(state):
             return {
                 "chart_spec": {
                     "type": "line",
+                    "chart_type": "line",
                     "title": f"Xu hướng {y_column} theo {x_column}",
                     "x": x_column,
                     "y": y_column,
@@ -129,6 +132,7 @@ def plan_chart_node(state):
 
             chart_spec = {
                 "type": chart_type,
+                "chart_type": chart_type,
                 "title": title,
                 "x": x_column,
                 "y": y_column,

@@ -1,4 +1,4 @@
-from services.security_service import validate_readonly_sql
+from services.security_service import add_default_limit, validate_readonly_sql
 
 
 def guard_sql_node(state):
@@ -11,8 +11,12 @@ def guard_sql_node(state):
             "error": validation["reason"],
         }
 
+    limited_sql = add_default_limit(validation["sql"])
+    validation = dict(validation)
+    validation["sql"] = limited_sql
+
     return {
-        "generated_sql": validation["sql"],
+        "generated_sql": limited_sql,
         "sql_validation": validation,
         "error": None,
     }
