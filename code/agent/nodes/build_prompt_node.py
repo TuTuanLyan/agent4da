@@ -26,6 +26,9 @@ Rules:
 
 
 def build_prompt_node(state):
+    if state.get("error"):
+        return {}
+
     prompt = f"""
 {SYSTEM_PROMPT}
 

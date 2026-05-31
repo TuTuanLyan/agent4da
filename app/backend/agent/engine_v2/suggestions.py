@@ -108,7 +108,9 @@ def answer_type_for(state: dict[str, Any]) -> str:
     if intent in {"metadata_tables", "metadata_columns"}:
         return "metadata"
     if intent == "unsupported":
-        return "clarification"
+        # A grounded free-form reply from the conversational assistant is a real
+        # answer; only fall back to "clarification" when no answer was produced.
+        return "answer" if state.get("conversational_answer") else "clarification"
     if status == "success" and int(state.get("row_count") or 0) == 0 and intent not in {"explain_sql", "chart_previous"}:
         return "empty_result"
     if state.get("needs_clarification"):

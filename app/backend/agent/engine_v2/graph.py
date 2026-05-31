@@ -89,6 +89,8 @@ class AgentState(TypedDict):
     chart_data: NotRequired[list[dict[str, Any]]]
     answer: NotRequired[str]
     answer_type: NotRequired[str]
+    conversational_answer: NotRequired[bool]
+    conversational_suggestions: NotRequired[list[dict[str, Any]]]
     needs_clarification: NotRequired[bool]
     clarification_suggestions: NotRequired[list[dict[str, Any]]]
     assumptions: NotRequired[list[str]]
@@ -394,6 +396,8 @@ def initialize_node(state: AgentState) -> AgentState:
         "chart_data": [],
         "answer": "",
         "answer_type": "answer",
+        "conversational_answer": False,
+        "conversational_suggestions": [],
         "needs_clarification": False,
         "clarification_suggestions": [],
         "assumptions": [],
@@ -614,34 +618,89 @@ def metadata_answer_node(state: AgentState) -> AgentState:
     }
 
 
-def assistive_clarification_node(state: AgentState) -> AgentState:
-    question = (state.get("effective_question") or state["question"]).strip()
-    if any(token in question.lower() for token in ("thời tiết", "thoi tiet", "weather", "crypto", "bitcoin", "tin tức", "tin tuc", "news")):
-        answer = (
+def _fallback_clarification_answer(question: str) -> str:
+    if any(
+        token in question.lower()
+        for token in ("thời tiết", "thoi tiet", "weather", "crypto", "bitcoin", "tin tức", "tin tuc", "news")
+    ):
+        return (
             "Mình chưa có nguồn dữ liệu đó trong hệ thống hiện tại. "
             "Mình có thể hỗ trợ phân tích hành vi e-commerce từ Gold data; hãy chọn một hướng bên dưới."
         )
-    else:
-        answer = (
-            "Mình chưa đủ thông tin để tạo một truy vấn phân tích an toàn. "
-            "Bạn có thể chọn metric, thời gian hoặc chiều phân tích phù hợp bên dưới."
+    return (
+        "Mình chưa đủ thông tin để tạo một truy vấn phân tích an toàn. "
+        "Bạn có thể chọn metric, thời gian hoặc chiều phân tích phù hợp bên dưới."
+    )
+
+
+def assistive_clarification_node(state: AgentState) -> AgentState:
+    """Answer free-form prompts the deterministic SQL pipeline cannot classify.
+
+    Uses the Groq conversational assistant grounded in the semantic metadata and
+    the current chat context. Falls back to the deterministic clarification
+    message whenever the LLM is unavailable or fails, so behaviour degrades
+    gracefully and stays guardrail-neutral (no SQL is generated here).
+    """
+    question = (state.get("effective_question") or state["question"]).strip()
+    recent_context = state.get("recent_context") or []
+
+    conversation: dict[str, Any] = {"llm_used": False}
+    try:
+        from .conversation import answer_conversational
+
+        # overview is built lazily inside (only when a Groq key is configured),
+        # so there is no Trino round-trip when the LLM is unavailable.
+        conversation = answer_conversational(question, recent_context)
+    except Exception:  # noqa: BLE001 - conversational answer is best-effort
+        conversation = {"llm_used": False}
+
+    answered = bool(conversation.get("llm_used")) and bool(conversation.get("answer"))
+    if answered:
+        answer = conversation["answer"]
+        validation_note = (
+            "Answered a free-form question with the Groq conversational assistant "
+            "grounded in Gold semantic metadata and chat context."
         )
+        warnings: list[str] = []
+    else:
+        answer = _fallback_clarification_answer(question)
+        validation_note = (
+            "The request was routed to assistive clarification instead of returning "
+            "a hard unsupported answer."
+        )
+        warnings = ["Cần bổ sung ngữ cảnh trước khi sinh SQL."]
+
+    follow_ups = conversation.get("follow_ups") or []
+    conversational_suggestions = [
+        {
+            "label": follow_up[:64],
+            "question": follow_up,
+            "reason": "Gợi ý tiếp theo dựa trên ngữ cảnh cuộc trò chuyện.",
+            "intent": "clarification",
+            "confidence": "medium",
+        }
+        for follow_up in follow_ups
+        if isinstance(follow_up, str) and follow_up.strip()
+    ]
+
     return {
         **state,
         "answer": answer,
-        "answer_type": "clarification",
-        "needs_clarification": True,
+        "answer_type": "answer" if answered else "clarification",
+        "conversational_answer": answered,
+        "conversational_suggestions": conversational_suggestions,
+        "needs_clarification": not answered,
         "generated_sql": "",
         "used_tables": [],
         "row_count": 0,
         "rows": [],
-        "warnings": ["Cần bổ sung ngữ cảnh trước khi sinh SQL."],
+        "warnings": warnings,
         "insights": [],
         "insight_source": "rule_based",
         "llm_insight_used": False,
-        "confidence": "low",
-        "validation_notes": ["The request was routed to assistive clarification instead of returning a hard unsupported answer."],
-        "chart": _empty_chart("Câu hỏi cần làm rõ nên hiển thị dạng text và suggestion."),
+        "confidence": "high" if answered else "low",
+        "validation_notes": [validation_note],
+        "chart": _empty_chart("Câu trả lời dạng hội thoại nên hiển thị dạng text và suggestion."),
         "chart_type": None,
         "chart_data": [],
         "metadata_used": {"tables": [], "columns": {}},
@@ -873,9 +932,32 @@ def insight_node(state: AgentState) -> AgentState:
     }
 
 
+def _merge_suggestions(
+    primary: list[dict[str, Any]],
+    secondary: list[dict[str, Any]],
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in [*primary, *secondary]:
+        if not isinstance(item, dict):
+            continue
+        key = " ".join(str(item.get("question", "")).lower().split())
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        merged.append(item)
+    return merged[:limit]
+
+
 def suggestion_generation_node(state: AgentState) -> AgentState:
     assumptions = build_assumptions(state)
     suggestions = build_suggestions({**state, "assumptions": assumptions})
+    # For conversational answers, lead with the LLM's context-aware follow-ups
+    # and keep the deterministic chips as a backstop.
+    conversational_suggestions = state.get("conversational_suggestions") or []
+    if conversational_suggestions:
+        suggestions = _merge_suggestions(conversational_suggestions, suggestions)
     needs = needs_clarification(state, assumptions, suggestions)
     enriched: AgentState = {
         **state,

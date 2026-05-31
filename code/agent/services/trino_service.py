@@ -47,16 +47,22 @@ def get_trino_connection(catalog="iceberg", schema="metadata"):
     user = os.getenv("TRINO_USER", "agent4da")
     key = (host, port, user, catalog, schema)
 
-    if key not in _CONNECTIONS:
-        _CONNECTIONS[key] = connect_to_trino(
+    # Only cache successful connections. Caching a failed (None) connection
+    # would poison the cache for the lifetime of the process, so metadata
+    # loading would keep returning empty even after Trino becomes reachable.
+    connection = _CONNECTIONS.get(key)
+    if connection is None:
+        connection = connect_to_trino(
             host=host,
             port=port,
             user=user,
             catalog=catalog,
             schema=schema,
         )
+        if connection is not None:
+            _CONNECTIONS[key] = connection
 
-    return _CONNECTIONS[key]
+    return connection
 
 
 def execute_query(connection, query):

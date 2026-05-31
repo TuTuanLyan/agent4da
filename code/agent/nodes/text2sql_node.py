@@ -10,6 +10,9 @@ def clean_sql_query(generated_query: str) -> str:
 
 def generate_sql_node(state):
 
+    if state.get("error"):
+        return {}
+
     sql = generate_sql(state["prompt"])
 
     return {

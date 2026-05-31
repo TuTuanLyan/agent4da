@@ -11,7 +11,17 @@ from __future__ import annotations
 
 import pytest
 
-from agent.engine_v2 import charts, corrector, guard, insights, nlu, runner, suggestions, validator
+from agent.engine_v2 import (
+    charts,
+    conversation,
+    corrector,
+    guard,
+    insights,
+    nlu,
+    runner,
+    suggestions,
+    validator,
+)
 from agent.engine_v2.config import GOLD_PREFIX
 
 
@@ -360,3 +370,89 @@ def test_response_to_state_error_and_blocked_mapping():
     blocked = runner.response_to_state({"status": "blocked", "error_message": "nope", "rows": []})
     assert blocked["status"] == "blocked"
     assert blocked["guard_status"] == "blocked"
+
+
+# --- Conversational assistant (free-form prompts) ---------------------------
+
+def test_conversation_falls_back_without_key(monkeypatch):
+    # No Groq key -> must not call out, must signal llm_used=False, never raise.
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    out = conversation.answer_conversational("Giải thích fact_events khác fact_sales thế nào?", [])
+    assert out["llm_used"] is False
+    assert out["answer"] == ""
+    assert out["follow_ups"] == []
+
+
+def test_build_overview_text_renders_business_semantics():
+    overview = {
+        "source": "catalog",
+        "tables": [
+            {
+                "table_name": "daily_event_summary",
+                "display_name": "Daily event summary",
+                "purpose": "Daily traffic, conversion, revenue.",
+                "grain": "1 row = 1 event_date.",
+                "use_for": "Daily totals.",
+                "columns": [
+                    {"name": "event_date", "type": "date", "meaning": "ngày", "business_terms": ""},
+                    {"name": "total_revenue", "type": "double", "meaning": "doanh thu", "business_terms": "revenue"},
+                ],
+            }
+        ],
+    }
+    text = conversation.build_overview_text(overview)
+    assert f"{GOLD_PREFIX}.daily_event_summary" in text
+    assert "Daily traffic, conversion, revenue." in text
+    assert "total_revenue" in text
+
+
+def test_answer_type_for_conversational_answer_is_answer():
+    answered = {"intent": "unsupported", "status": "success", "conversational_answer": True, "row_count": 0}
+    assert suggestions.answer_type_for(answered) == "answer"
+
+    unanswered = {"intent": "unsupported", "status": "success", "conversational_answer": False, "row_count": 0}
+    assert suggestions.answer_type_for(unanswered) == "clarification"
+
+
+def test_assistive_clarification_node_falls_back_without_key(monkeypatch):
+    pytest.importorskip("langgraph")
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    from agent.engine_v2 import graph
+
+    out = graph.assistive_clarification_node(
+        {"question": "Bạn giúp được gì?", "effective_question": "Bạn giúp được gì?", "recent_context": []}
+    )
+    assert out["conversational_answer"] is False
+    assert out["answer_type"] == "clarification"
+    assert out["answer"]  # a non-empty deterministic fallback
+    assert out["conversational_suggestions"] == []
+    assert out["status"] == "success"
+
+
+def test_assistive_clarification_node_uses_conversational_answer(monkeypatch):
+    pytest.importorskip("langgraph")
+    from agent.engine_v2 import graph
+
+    monkeypatch.setattr(
+        conversation,
+        "answer_conversational",
+        lambda *args, **kwargs: {
+            "answer": "fact_events chứa mọi event, fact_sales chỉ chứa purchase.",
+            "follow_ups": ["Doanh thu theo ngày trong tháng 1/2020 là bao nhiêu?"],
+            "llm_used": True,
+            "error": None,
+        },
+    )
+
+    out = graph.assistive_clarification_node(
+        {
+            "question": "fact_events khác fact_sales thế nào?",
+            "effective_question": "fact_events khác fact_sales thế nào?",
+            "recent_context": [],
+        }
+    )
+    assert out["conversational_answer"] is True
+    assert out["answer_type"] == "answer"
+    assert "fact_sales" in out["answer"]
+    assert len(out["conversational_suggestions"]) == 1
+    assert out["conversational_suggestions"][0]["question"].startswith("Doanh thu theo ngày")

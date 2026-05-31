@@ -61,6 +61,9 @@ def _referenced_tables(sql):
 
 
 def guard_sql_node(state):
+    if state.get("error"):
+        return {}
+
     sql = (state.get("generated_sql") or "").strip()
     stripped = sql.rstrip(";").strip()
     normalized = re.sub(r"\s+", " ", stripped).strip()

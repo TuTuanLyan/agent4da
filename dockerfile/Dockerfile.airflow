@@ -12,19 +12,18 @@ FROM apache/airflow:2.10.4-python3.10
 
 USER root
 
-# Java 17 — cần để spark-submit chạy được từ trong container airflow
+# Java 17 — cần để spark-submit chạy được từ trong container airflow.
+# JAVA_HOME must match the build arch (amd64 vs arm64); hardcoding amd64 breaks
+# spark-submit on arm64 (Apple Silicon). Derive it from the real java binary and
+# expose it under a stable, arch-independent symlink.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends openjdk-17-jdk \
  && apt-get clean \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && ln -sfn "$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" /usr/lib/jvm/current-java
 
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
- && JAVA_HOME_DIR="$(dirname "$(dirname "$(readlink -f "$(command -v java)")")")" \
- && ln -s "$JAVA_HOME_DIR" /usr/lib/jvm/java-17-openjdk-current \
- && apt-get clean \
- && rm -rf /var/lib/apt/lists/*
-
-ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-current
+ENV JAVA_HOME=/usr/lib/jvm/current-java
+ENV PATH=$JAVA_HOME/bin:$PATH
 
 # Copy toàn bộ Spark từ spark image (spark-submit, pyspark, conf, jars gốc)
 COPY --from=spark /opt/spark /opt/spark
@@ -39,11 +38,26 @@ RUN chmod +x /entrypoint.sh
 # Trở lại user airflow (uid=50000) để pip install
 USER airflow
 
+# Providers + drivers. NOTE: apache-airflow-providers-apache-spark declares
+# `pyspark>=3.1.3`, which pip resolves to the ~455 MB pyspark *source* tarball
+# (PyPI ships no wheel) and then builds -- that is the step that appears to hang.
+# We submit Spark jobs via the spark-submit binary from /opt/spark (copied above),
+# so the PyPI pyspark package is not needed. Install the Spark provider with
+# --no-deps; its real deps are apache-airflow + grpcio-status (already in the base
+# image) and common-sql (pulled in by the postgres provider below).
 RUN pip install --no-cache-dir \
-    apache-airflow-providers-apache-spark==4.10.0 \
-    apache-airflow-providers-postgres==5.12.0 \
-    psycopg2-binary==2.9.9 \
-    kafka-python-ng
+        apache-airflow-providers-postgres==5.12.0 \
+        psycopg2-binary==2.9.9 \
+        kafka-python-ng \
+ && pip install --no-cache-dir --no-deps \
+        apache-airflow-providers-apache-spark==4.10.0
 
-ENTRYPOINT ["/entrypoint.sh"]
+# Expose the Spark-bundled pyspark (exact match to the runtime Spark) on the
+# Python path via a .pth file, so `import pyspark` works without the PyPI build.
+RUN SP="$(python -c 'import site; print(site.getusersitepackages())')" \
+ && mkdir -p "$SP" \
+ && { echo /opt/spark/python; \
+      ls -d /opt/spark/python/lib/py4j-*-src.zip 2>/dev/null || true; } \
+      > "$SP/spark_python.pth"
+
 ENTRYPOINT ["/entrypoint.sh"]

@@ -62,8 +62,6 @@ def bronze_pipeline():
         # Script — path trong container airflow (volume ./code → /opt/project/code)
         application="/opt/project/code/spark/bronze_job.py",
 
-        # Không dùng --jars: tránh Spark copy jar vào log/spark/app-* mỗi lần chạy.
-        jars=None,
         # Dùng --jars với scheme local: (jar đã mount sẵn ở /opt/project/jars
         # trên mọi node). Cần --jars để Kafka datasource (.format("kafka"))
         # được nạp vào application classloader — chỉ extraClassPath/

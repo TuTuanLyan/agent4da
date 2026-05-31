@@ -5,7 +5,16 @@ def load_semantic_metadata(connection=None):
     from services.trino_service import execute_query_to_dicts, get_trino_connection
 
     connection = connection or get_trino_connection()
+    if connection is None:
+        # Fail loudly instead of returning empty metadata. An empty schema
+        # context lets the agent generate SQL with no table knowledge.
+        raise RuntimeError(
+            "Cannot load semantic metadata: no Trino connection. "
+            "Check Trino is running and TRINO_HOST/TRINO_PORT are correct."
+        )
 
+    # raise_on_error=True so a broken connection or a missing metadata schema
+    # surfaces here rather than being swallowed into an empty result.
     tables = execute_query_to_dicts(
         connection,
         """
@@ -14,6 +23,7 @@ def load_semantic_metadata(connection=None):
         WHERE is_agent_visible = true
         ORDER BY table_name
         """,
+        raise_on_error=True,
     )
     columns = execute_query_to_dicts(
         connection,
@@ -23,6 +33,7 @@ def load_semantic_metadata(connection=None):
         WHERE is_agent_visible = true
         ORDER BY table_name, column_name
         """,
+        raise_on_error=True,
     )
 
     columns_by_table = defaultdict(list)
@@ -34,6 +45,12 @@ def load_semantic_metadata(connection=None):
         row = dict(table)
         row["columns"] = columns_by_table.get(table["table_name"], [])
         table_rows.append(row)
+
+    print(
+        "[Metadata] Loaded {tables} agent-visible tables and {columns} columns "
+        "from semantic catalog.".format(tables=len(table_rows), columns=len(columns)),
+        flush=True,
+    )
 
     return {
         "tables": table_rows,

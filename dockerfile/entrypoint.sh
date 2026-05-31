@@ -34,6 +34,20 @@ _cleanup() {
 trap _cleanup SIGTERM SIGINT
 
 # ---------------------------------------------------------------------------
+# 0. Clear stale PID files from an unclean shutdown (crash loop / SIGKILL).
+#    /opt/airflow is a persistent named volume, so a webserver PID file from a
+#    previous container survives a restart and makes gunicorn refuse to start:
+#    "Already running on PID <n> (or pid file ... is stale)". Removing them is
+#    safe here: this entrypoint is the only thing that starts these processes.
+# ---------------------------------------------------------------------------
+AIRFLOW_HOME="${AIRFLOW_HOME:-/opt/airflow}"
+log "Clearing stale PID files (if any)..."
+rm -f "${AIRFLOW_HOME}/airflow-webserver.pid" \
+      "${AIRFLOW_HOME}/airflow-webserver-monitor.pid" \
+      "${AIRFLOW_HOME}/airflow-scheduler.pid" \
+      "${AIRFLOW_HOME}/airflow-triggerer.pid" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
 # 1. DB migrate — idempotent, safe to run on every restart
 # ---------------------------------------------------------------------------
 log "Running db migrate..."
