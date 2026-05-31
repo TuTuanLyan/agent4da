@@ -12,7 +12,9 @@ def connect_to_trino(host, port, user, catalog, schema):
             port=port,
             user=user,
             catalog=catalog,
-            schema=schema
+            schema=schema,
+            max_attempts=int(os.getenv("TRINO_MAX_ATTEMPTS", "1")),
+            request_timeout=float(os.getenv("TRINO_REQUEST_TIMEOUT_SECONDS", "5")),
         )
         print("[Trino] Connection to Trino established successfully.")
         return connection
@@ -28,15 +30,17 @@ def get_trino_connection(catalog="iceberg", schema="metadata"):
     key = (host, port, user, catalog, schema)
 
     if key not in _CONNECTIONS:
-        _CONNECTIONS[key] = connect_to_trino(
+        connection = connect_to_trino(
             host=host,
             port=port,
             user=user,
             catalog=catalog,
             schema=schema,
         )
+        if connection is not None:
+            _CONNECTIONS[key] = connection
 
-    return _CONNECTIONS[key]
+    return _CONNECTIONS.get(key)
 
 
 def execute_query(connection, query):

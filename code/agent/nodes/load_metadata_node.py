@@ -10,4 +10,6 @@ def load_metadata_node(state):
 
     return {
         "schema_context": schema_context,
+        "metadata_source": metadata.get("source"),
+        "metadata_warning": metadata.get("warning"),
     }
