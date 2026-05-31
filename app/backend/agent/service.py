@@ -40,6 +40,10 @@ log = structlog.get_logger("agent.service")
 
 # How many prior turns to feed back to the agent as follow-up context.
 MAX_CONTEXT_TURNS = 3
+# The v2 engine resolves follow-ups itself (deterministic + LLM rewrite); it
+# wants a few full prior turns, hydrated from the durable query_runs history so
+# context survives a process restart or multi-worker routing.
+V2_CONTEXT_TURNS = 5
 SESSION_TITLE_MAX_LEN = 80
 CUSTOM_SESSION_TITLE_MAX_LEN = 200
 
@@ -130,6 +134,7 @@ def _run_v2_sync(
     run_id: str,
     session_id: Optional[uuid.UUID],
     user_id: Optional[uuid.UUID],
+    recent_context: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     # Bridge APP_* -> TRINO_* so the shared Trino client connects correctly.
     _bridge_env(get_settings())
@@ -140,6 +145,7 @@ def _run_v2_sync(
         session_id=str(session_id) if session_id else "",
         user_id=str(user_id) if user_id else None,
         run_id=run_id,
+        recent_context=recent_context,
     )
 
 
@@ -151,15 +157,17 @@ async def run_agent_state(
     engine: str = "legacy",
     session_id: Optional[uuid.UUID] = None,
     user_id: Optional[uuid.UUID] = None,
+    recent_context: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Async wrapper. Cancellation propagates via asyncio.CancelledError.
 
     For the v2 engine the raw question is passed straight through (the v2 graph
-    resolves follow-ups itself); the legacy engine receives whatever question the
-    caller built (typically with a prepended context preamble).
+    resolves follow-ups itself) along with the prior turns hydrated from durable
+    history; the legacy engine receives whatever question the caller built
+    (typically with a prepended context preamble).
     """
     if engine == "v2":
-        return await asyncio.to_thread(_run_v2_sync, question, run_id, session_id, user_id)
+        return await asyncio.to_thread(_run_v2_sync, question, run_id, session_id, user_id, recent_context)
     return await asyncio.to_thread(_run_graph_sync, question, summarize, run_id)
 
 
@@ -404,6 +412,76 @@ def recent_session_questions(
     return list(reversed(list(rows)))
 
 
+def _query_run_to_context_turn(run: QueryRun) -> Dict[str, Any]:
+    """Reconstruct a v2 conversation turn from a persisted QueryRun row.
+
+    Mirrors the shape `engine_v2.context.save_turn` stores in-process, pulling the
+    NLU/metadata fields back out of the JSON `agent_trace` and `chart_payload`
+    columns so durable history can seed follow-up resolution after a restart.
+    """
+    trace = run.agent_trace if isinstance(run.agent_trace, dict) else {}
+    # The agent_trace carries the resolved NLU spec fields; rebuild the canonical
+    # Active Query Spec so follow-ups can be resolved as deltas after a restart.
+    from agent.engine_v2.spec import canonical_spec
+
+    result_rows = run.result_json if isinstance(run.result_json, list) else []
+    result_sample = [row for row in result_rows[:20] if isinstance(row, dict)]
+    result_columns = list(run.columns) if isinstance(run.columns, list) and run.columns else (
+        list(result_sample[0].keys()) if result_sample else []
+    )
+    return {
+        "turn_id": run.turn_index if run.turn_index is not None else 0,
+        "session_id": str(run.session_id) if run.session_id else "",
+        "question": run.question or "",
+        "intent": trace.get("intent"),
+        "generated_sql": run.generated_sql or "",
+        "answer": run.summary_text or "",
+        "used_tables": trace.get("used_tables") or [],
+        "table_candidates": trace.get("table_candidates") or [],
+        "chart": run.chart_payload or {},
+        "clarification_suggestions": trace.get("clarification_suggestions") or [],
+        "assumptions": trace.get("assumptions") or [],
+        "row_count": int(run.row_count or 0),
+        "status": run.status,
+        "effective_spec": canonical_spec(trace),
+        "result_columns": result_columns,
+        "result_sample": result_sample,
+        "clarification": {
+            "needs_clarification": bool(trace.get("needs_clarification")),
+            "suggestions": trace.get("clarification_suggestions") or [],
+        },
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+    }
+
+
+def recent_session_context(
+    session: Session,
+    session_id: Optional[uuid.UUID],
+    user_id: Optional[uuid.UUID] = None,
+    limit: int = V2_CONTEXT_TURNS,
+) -> List[Dict[str, Any]]:
+    """Newest-first reconstruction of recent turns from durable `query_runs`.
+
+    This is the v2 engine's source of follow-up context, so resolution survives a
+    process restart or multi-worker routing (the in-process store in
+    `engine_v2.context` is only a same-process fast path). Scoped to `user_id`
+    when provided so a forged `session_id` cannot leak another user's turns into
+    the prompt context.
+    """
+    if session_id is None:
+        return []
+    stmt = select(QueryRun).where(QueryRun.session_id == session_id)
+    if user_id is not None:
+        stmt = stmt.where(QueryRun.user_id == user_id)
+    # turn_index is the deterministic intra-session tiebreaker when two runs share
+    # a created_at timestamp (coarse clock resolution).
+    stmt = stmt.order_by(
+        QueryRun.created_at.desc(), QueryRun.turn_index.desc().nullslast()
+    ).limit(limit)
+    runs = session.execute(stmt).scalars().all()
+    return [_query_run_to_context_turn(run) for run in runs]
+
+
 def build_effective_question(question: str, prior_questions: List[str]) -> Tuple[str, bool]:
     """Prepend a compact context preamble so follow-ups resolve naturally.
 
@@ -548,10 +626,13 @@ async def execute_ask(
     chart_suggestion: Optional[Dict[str, Any]] = None
     insights: List[str] = []
 
-    # The v2 graph resolves follow-ups itself, so it gets the raw question; the
-    # legacy graph receives a context-prepended question built from prior turns.
+    # The v2 graph resolves follow-ups itself, so it gets the raw question plus
+    # the prior turns rehydrated from durable history; the legacy graph receives a
+    # context-prepended question built from prior questions.
+    recent_context: List[Dict[str, Any]] = []
     if engine == "v2":
         effective_question = question
+        recent_context = recent_session_context(session, session_id, user_id)
     else:
         prior = recent_session_questions(session, session_id, user_id)
         effective_question, _ctx = build_effective_question(question, prior)
@@ -565,6 +646,7 @@ async def execute_ask(
             engine=engine,
             session_id=session_id,
             user_id=user_id,
+            recent_context=recent_context,
         )
 
         if engine == "v2":

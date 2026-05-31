@@ -60,7 +60,23 @@ def _extract_metrics(text: str) -> list[str]:
 
 
 def _extract_dimension(text: str) -> str | None:
-    if _contains_any(text, ("brand", "hãng", "hang", "thương hiệu", "thuong hieu")):
+    # "nhãn hàng" / "nhãn hiệu" are common Vietnamese words for brand; keep the
+    # accented "nhãn" but not bare ASCII "nhan" (collides with "nhanh" = fast).
+    if _contains_any(
+        text,
+        (
+            "brand",
+            "hãng",
+            "hang",
+            "thương hiệu",
+            "thuong hieu",
+            "nhãn hàng",
+            "nhan hang",
+            "nhãn hiệu",
+            "nhan hieu",
+            "nhãn",
+        ),
+    ):
         return "brand"
     if _contains_any(text, ("category", "danh mục", "danh muc")):
         return "category"
@@ -116,6 +132,13 @@ def _extract_time_range(text: str) -> dict[str, str] | None:
         return _symbolic_time_range("yesterday")
     if _contains_any(text, ("tuần này", "tuan nay", "this week")):
         return _symbolic_time_range("this_week")
+
+    # A bare/era year ("trong 2020", "năm 2020", "in 2019") -> full-year range.
+    # Runs last so explicit yyyy-mm-dd dates above win.
+    year_match = re.search(r"\b(19|20)\d{2}\b", text)
+    if year_match:
+        year = year_match.group(0)
+        return _date_range(f"{year}-01-01", f"{year}-12-31")
     return None
 
 
@@ -155,6 +178,200 @@ def _extract_comparison_entities(text: str) -> list[str]:
 
     mentioned_brands = [brand for brand in BRAND_ENTITIES if re.search(rf"\b{brand}\b", text)]
     return mentioned_brands[:2] if len(mentioned_brands) >= 2 else []
+
+
+# Exclusion follow-ups ("bỏ qua nhãn hàng unknown", "loại trừ apple, sony") map
+# to NOT IN filters. The dimension words are stripped so only the entity values
+# remain.
+_EXCLUSION_RE = re.compile(
+    r"(?:bỏ qua|bo qua|loại trừ|loai tru|loại bỏ|loai bo|không tính|khong tinh|"
+    r"không bao gồm|khong bao gom|ngoại trừ|ngoai tru|exclude|except|without)\s+(.+)$"
+)
+# Dimension words to strip from an exclusion phrase, longest-first so multi-word
+# phrases are removed before their fragments. Accented + ASCII so it works on
+# either spelling.
+_DIMENSION_PHRASES = (
+    "nhãn hàng", "nhan hang", "nhãn hiệu", "nhan hieu",
+    "thương hiệu", "thuong hieu", "danh mục", "danh muc",
+    "sản phẩm", "san pham",
+    "nhãn", "nhan", "hãng", "hang", "brand", "category", "product",
+)
+
+
+def _filter_field_from_text(text: str, fallback: str | None) -> str:
+    if _contains_any(
+        text,
+        ("nhãn hàng", "nhan hang", "nhãn hiệu", "nhan hieu", "nhãn", "thương hiệu", "thuong hieu", "hãng", "hang", "brand"),
+    ):
+        return "brand"
+    if _contains_any(text, ("category", "danh mục", "danh muc")):
+        return "category"
+    if _contains_any(text, ("sản phẩm", "san pham", "product")):
+        return "product"
+    return fallback or "brand"
+
+
+def extract_exclusion_filters(question: str, dimension: str | None = None) -> list[dict[str, Any]]:
+    """Parse "bỏ qua/loại trừ/không tính/ngoại trừ <X>" into a NOT IN filter.
+
+    The matched dimension words are dropped so only the entity values remain,
+    e.g. "bỏ qua nhãn hàng unknown" -> [{field: brand, operator: not_in,
+    values: ["unknown"]}]. Returns [] when no exclusion phrase is present.
+    """
+    text = question.strip().lower()
+    match = _EXCLUSION_RE.search(text)
+    if not match:
+        return []
+    tail = match.group(1).strip()
+    field = _filter_field_from_text(tail, dimension)
+    # Strip dimension words (keeps entity values, incl. non-ASCII brand names).
+    cleaned = tail
+    for phrase in _DIMENSION_PHRASES:
+        cleaned = cleaned.replace(phrase, " ")
+    chunks = re.split(r"\s*(?:,|;|/|\bvà\b|\bva\b|\band\b)\s*", cleaned)
+    values: list[str] = []
+    for chunk in chunks:
+        value = re.sub(r"\s+", " ", chunk).strip(" \t.,;:!?-")
+        if value:
+            values.append(value)
+    if not values:
+        return []
+    return [{"field": field, "operator": "not_in", "values": values}]
+
+
+_TIME_WORDS = ("năm", "nam", "tháng", "thang", "ngày", "ngay", "quý", "quy", "tuần", "tuan", "year", "month", "quarter", "week", "hôm", "hom")
+
+# Note: bare ASCII "chi" is intentionally excluded - it collides with "chi tiết"
+# (detail), "chi phí" (cost), etc. Accented "chỉ" is unambiguous.
+_INCLUSION_RE = re.compile(
+    r"(?:^|\b)(?:chỉ|riêng|rieng|duy nhất|duy nhat|only|just)\s+(.+)$"
+)
+_THRESHOLD_WORDS = ("trên", "tren", "dưới", "duoi", "lớn hơn", "lon hon", "nhỏ hơn", "nho hon", "ít nhất", "it nhat", "tối đa", "toi da", "tối thiểu", "toi thieu", ">", "<", "≥", "≤")
+
+
+def _looks_like_time_or_limit(tail: str) -> bool:
+    if re.search(r"\b(19|20)\d{2}\b", tail):
+        return True
+    if _contains_any(tail, _TIME_WORDS):
+        return True
+    if re.match(r"^\s*(?:top\s+)?\d", tail):
+        return True
+    return False
+
+
+def extract_inclusion_filters(question: str, dimension: str | None = None) -> list[dict[str, Any]]:
+    """Parse "chỉ / riêng / only <X>" into an IN filter (restrict to X).
+
+    Skips time ("chỉ năm 2021") and limit ("chỉ 5", "chỉ top 5") tails, which are
+    not entity restrictions. Returns [] when no inclusion entity is present.
+    """
+    text = question.strip().lower()
+    match = _INCLUSION_RE.search(text)
+    if not match:
+        return []
+    tail = match.group(1).strip()
+    # "chỉ ... trên 1000" is a numeric threshold, not an entity restriction.
+    if _looks_like_time_or_limit(tail) or _contains_any(tail, _THRESHOLD_WORDS) or extract_threshold_filters(text):
+        return []
+    field = _filter_field_from_text(tail, dimension)
+    cleaned = tail
+    for phrase in _DIMENSION_PHRASES:
+        cleaned = cleaned.replace(phrase, " ")
+    chunks = re.split(r"\s*(?:,|;|/|\bvà\b|\bva\b|\band\b)\s*", cleaned)
+    values: list[str] = []
+    for chunk in chunks:
+        value = re.sub(r"\s+", " ", chunk).strip(" \t.,;:!?-")
+        # Drop trailing analytic words that are not entity names.
+        if value and value not in ("thôi", "thoi", "nhé", "nhe", "thì sao", "thi sao"):
+            values.append(value)
+    if not values:
+        return []
+    return [{"field": field, "operator": "in", "values": values}]
+
+
+_NUMBER_UNIT_RE = re.compile(
+    r"(\d[\d.,]*)\s*(tỷ|ty|triệu|trieu|nghìn|nghin|tr|k|m|b)?",
+    flags=re.IGNORECASE,
+)
+_UNIT_MULTIPLIER = {
+    "k": 1_000, "nghìn": 1_000, "nghin": 1_000,
+    "tr": 1_000_000, "triệu": 1_000_000, "trieu": 1_000_000, "m": 1_000_000,
+    "tỷ": 1_000_000_000, "ty": 1_000_000_000, "b": 1_000_000_000,
+}
+
+_THRESHOLD_PATTERNS = (
+    (">=", r"(?:ít nhất|it nhat|tối thiểu|toi thieu|từ|tu|>=|≥|at least)\s+"),
+    ("<=", r"(?:tối đa|toi da|nhiều nhất là|nhieu nhat la|<=|≤|at most)\s+"),
+    (">", r"(?:trên|tren|lớn hơn|lon hon|hơn|hon|>|greater than|more than|over)\s+"),
+    ("<", r"(?:dưới|duoi|nhỏ hơn|nho hon|ít hơn|it hon|<|less than|under|below)\s+"),
+)
+
+
+def _parse_number(token: str, unit: str | None) -> float | None:
+    cleaned = token.replace(",", "").rstrip(".")
+    try:
+        value = float(cleaned)
+    except ValueError:
+        return None
+    if unit:
+        value *= _UNIT_MULTIPLIER.get(unit.lower(), 1)
+    return value
+
+
+def extract_threshold_filters(question: str) -> list[dict[str, Any]]:
+    """Parse numeric thresholds ("trên 1000", "ít nhất 100", "dưới 1 triệu").
+
+    These apply to the question's metric, so the field is the sentinel
+    ``"__metric__"`` resolved to the aggregate column at SQL-build time (HAVING).
+    """
+    text = question.strip().lower()
+    out: list[dict[str, Any]] = []
+    for operator, prefix in _THRESHOLD_PATTERNS:
+        for match in re.finditer(prefix + _NUMBER_UNIT_RE.pattern, text):
+            number = match.group(1)
+            unit = match.group(2)
+            # A bare 4-digit year with no unit is a time filter, not a threshold.
+            if not unit and re.fullmatch(r"(?:19|20)\d{2}", number.replace(",", "").rstrip(".")):
+                continue
+            value = _parse_number(number, unit)
+            if value is None:
+                continue
+            out.append({"field": "__metric__", "operator": operator, "values": [value]})
+    return out
+
+
+def analyze_message(question: str, dimension_hint: str | None = None) -> dict[str, Any]:
+    """All NLU signals present in a (possibly elliptical) message.
+
+    Used by the follow-up classifier to build a typed patch. Unlike ``parse_nlu``
+    it does not force an intent; it just reports what the message mentions.
+    """
+    text = question.strip().lower()
+    dimension = _extract_dimension(text) or dimension_hint
+    return {
+        "text": text,
+        "metric": _extract_metric(text),
+        "metrics": _extract_metrics(text),
+        "dimension": _extract_dimension(text),
+        "time_range": _extract_time_range(text),
+        "time_grain": _extract_time_grain(text),
+        "sort_direction": _extract_sort_direction(text),
+        "limit": _extract_limit_explicit(text),
+        "exclusion_filters": extract_exclusion_filters(text, dimension),
+        "inclusion_filters": extract_inclusion_filters(text, dimension),
+        "threshold_filters": extract_threshold_filters(text),
+        "comparison_entities": _extract_comparison_entities(text),
+    }
+
+
+def _extract_limit_explicit(text: str) -> int | None:
+    """Like _extract_limit but returns None when no limit is stated."""
+    match = re.search(r"\b(?:top|limit|lấy|lay|xem|liệt kê|liet ke|chỉ|chi)\s+(\d{1,3})\b", text)
+    if not match:
+        match = re.search(r"\b(\d{1,3})\s+(?:thôi|thoi|cái|cai)\b", text)
+    if not match:
+        return None
+    return max(1, min(int(match.group(1)), 100))
 
 
 def _table_candidates(dimension: str | None, metric: str | None, intent: str, time_grain: str | None) -> list[str]:
@@ -225,6 +442,10 @@ def parse_nlu(question: str) -> dict[str, Any]:
     time_range = _extract_time_range(text)
     sort_direction = _extract_sort_direction(text)
     comparison_entities = _extract_comparison_entities(text)
+    exclusion_filters = extract_exclusion_filters(text, dimension)
+    inclusion_filters = extract_inclusion_filters(text, dimension)
+    threshold_filters = extract_threshold_filters(text)
+    extra_filters = exclusion_filters + inclusion_filters + threshold_filters
 
     extracted_entities = {
         "metrics": metrics,
@@ -232,6 +453,7 @@ def parse_nlu(question: str) -> dict[str, Any]:
         "time_grain": time_grain,
         "time_range": time_range,
         "comparison_entities": comparison_entities,
+        "filters": extra_filters,
     }
 
     asks_gold_tables = (
@@ -303,7 +525,7 @@ def parse_nlu(question: str) -> dict[str, Any]:
             analysis_type="comparison",
             time_range=time_range,
             time_grain=time_grain,
-            filters=[{"field": dimension, "operator": "in", "values": comparison_entities}],
+            filters=[{"field": dimension, "operator": "in", "values": comparison_entities}] + extra_filters,
             comparison_entities=comparison_entities,
             sort_direction=sort_direction or "desc",
             extracted_entities=extracted_entities,
@@ -337,6 +559,7 @@ def parse_nlu(question: str) -> dict[str, Any]:
             analysis_type="breakdown",
             time_range=time_range,
             time_grain=time_grain,
+            filters=extra_filters,
             sort_direction=sort_direction or "desc",
             extracted_entities=extracted_entities,
         )
@@ -355,6 +578,7 @@ def parse_nlu(question: str) -> dict[str, Any]:
             analysis_type="drilldown",
             time_range=time_range,
             time_grain=time_grain,
+            filters=extra_filters,
             sort_direction=sort_direction or "desc",
             extracted_entities=extracted_entities,
         )
@@ -377,6 +601,7 @@ def parse_nlu(question: str) -> dict[str, Any]:
             analysis_type="time_series",
             time_range=time_range,
             time_grain=time_grain,
+            filters=extra_filters,
             sort_direction=sort_direction,
             extracted_entities=extracted_entities,
         )
@@ -393,6 +618,7 @@ def parse_nlu(question: str) -> dict[str, Any]:
             analysis_type="time_series",
             time_range=time_range,
             time_grain=time_grain,
+            filters=extra_filters,
             sort_direction=sort_direction,
             extracted_entities=extracted_entities,
         )
@@ -409,6 +635,7 @@ def parse_nlu(question: str) -> dict[str, Any]:
             analysis_type="revenue_summary" if not dimension else "topk",
             time_range=time_range,
             time_grain=time_grain,
+            filters=extra_filters,
             sort_direction=sort_direction or ("desc" if dimension else None),
             extracted_entities=extracted_entities,
         )
@@ -426,6 +653,7 @@ def parse_nlu(question: str) -> dict[str, Any]:
             analysis_type="topk",
             time_range=time_range,
             time_grain=time_grain,
+            filters=extra_filters,
             sort_direction=sort_direction or "desc",
             extracted_entities=extracted_entities,
         )
@@ -444,6 +672,7 @@ def parse_nlu(question: str) -> dict[str, Any]:
             analysis_type="overview",
             time_range=time_range,
             time_grain=time_grain,
+            filters=extra_filters,
             sort_direction=sort_direction,
             extracted_entities=extracted_entities,
         )

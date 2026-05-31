@@ -380,6 +380,84 @@ def _and_conditions(conditions: list[str | None]) -> str:
     return " AND ".join(active_conditions)
 
 
+# Rate/price metrics must be averaged, not summed, when aggregating a dimension.
+_AVERAGE_METRIC_COLUMNS = {
+    "conversion_rate",
+    "cart_to_purchase_rate",
+    "avg_event_price",
+    "avg_price",
+}
+
+
+def _aggregate_expr(metric_column: str) -> str:
+    if metric_column in _AVERAGE_METRIC_COLUMNS or metric_column.endswith("_rate"):
+        return f"AVG({metric_column})"
+    return f"SUM({metric_column})"
+
+
+def _filter_conditions(
+    filters: list[dict] | None,
+    table_name: str,
+    metadata_context: dict | None,
+) -> str | None:
+    """Build case-insensitive IN / NOT IN conditions from NLU filters.
+
+    Used for exclusion follow-ups ("bỏ qua nhãn hàng unknown" -> NOT IN) and
+    explicit inclusions. Unknown fields/empty values are skipped so a bad filter
+    never produces invalid SQL.
+    """
+    # Only emit a filter when we can confirm the column exists on the table, so a
+    # brand exclusion never leaks onto daily_event_summary (which has no brand).
+    available_columns = _columns_for_table(metadata_context, table_name)
+    if not available_columns:
+        return None
+    conditions: list[str] = []
+    for spec in filters or []:
+        field = spec.get("field")
+        operator = (spec.get("operator") or "").lower()
+        values = [value for value in (spec.get("values") or []) if str(value).strip() != ""]
+        # Numeric metric thresholds (field "__metric__") are HAVING clauses,
+        # built separately by _having_conditions; skip them here.
+        if field == "__metric__" or operator in (">", ">=", "<", "<=", "between"):
+            continue
+        if not field or not values:
+            continue
+        column = _dimension_column(field, table_name, metadata_context)
+        if not column or column not in available_columns:
+            continue
+        value_sql = ", ".join(_sql_literal(str(value).lower()) for value in values)
+        if operator in ("not_in", "!=", "<>", "ne", "exclude", "not"):
+            conditions.append(f"lower({column}) NOT IN ({value_sql})")
+        elif operator in ("in", "=", "eq", "include"):
+            conditions.append(f"lower({column}) IN ({value_sql})")
+    return _and_conditions(conditions) or None
+
+
+def _having_conditions(filters: list[dict] | None, aggregate_expr: str) -> str | None:
+    """Build a HAVING clause from numeric metric thresholds (field "__metric__").
+
+    e.g. "trên 1000 view" on a ranking -> HAVING SUM(view_count) > 1000.
+    """
+    allowed = {">", ">=", "<", "<="}
+    conditions: list[str] = []
+    for spec in filters or []:
+        if spec.get("field") != "__metric__":
+            continue
+        operator = (spec.get("operator") or "").lower()
+        if operator not in allowed:
+            continue
+        values = spec.get("values") or []
+        if not values:
+            continue
+        try:
+            number = float(values[0])
+        except (TypeError, ValueError):
+            continue
+        literal = str(int(number)) if number.is_integer() else repr(number)
+        conditions.append(f"{aggregate_expr} {operator} {literal}")
+    return _and_conditions(conditions) or None
+
+
 def resolve_applied_time_filter(
     intent_result: dict | None,
     metadata_context: dict | None,
@@ -444,7 +522,16 @@ def _deterministic_sql(
             return None
         entity_sql = ", ".join(_sql_literal(entity.lower()) for entity in entities)
         time_condition, _applied = _time_filter_condition(table_name, metadata_context, intent_result.get("time_range"))
-        where_condition = _and_conditions([f"lower({dimension_column}) IN ({entity_sql})", time_condition])
+        # The entity IN-filter is already rendered above; only carry exclusions here.
+        exclusion_specs = [
+            spec
+            for spec in (intent_result.get("filters") or [])
+            if (spec.get("operator") or "").lower() in ("not_in", "!=", "<>", "ne", "exclude", "not")
+        ]
+        exclusion_condition = _filter_conditions(exclusion_specs, table_name, metadata_context)
+        where_condition = _and_conditions(
+            [f"lower({dimension_column}) IN ({entity_sql})", time_condition, exclusion_condition]
+        )
         return (
             f"SELECT {dimension_column}, SUM({metric_column}) AS {metric_column} "
             f"FROM {GOLD_PREFIX}.{table_name} "
@@ -458,15 +545,17 @@ def _deterministic_sql(
         table_name = _selected_table(intent_result, "daily_event_summary")
         metrics = _metric_list(intent_result, table_name, metadata_context)
         time_condition, _applied = _time_filter_condition(table_name, metadata_context, intent_result.get("time_range"))
-        where_clause = _where_clause(time_condition)
+        filter_condition = _filter_conditions(intent_result.get("filters"), table_name, metadata_context)
+        where_clause = _where_clause(_and_conditions([time_condition, filter_condition]))
         if table_name == "daily_event_summary" and len(metrics) > 1:
             return f"SELECT {', '.join(metrics)} FROM {GOLD_PREFIX}.{table_name}{where_clause} LIMIT {limit}"
         if dimension == "event_type":
             event_time_condition, _event_applied = _time_filter_condition("fact_events", metadata_context, intent_result.get("time_range"))
+            event_filter_condition = _filter_conditions(intent_result.get("filters"), "fact_events", metadata_context)
             return (
                 "SELECT event_type, COUNT(*) AS event_count "
                 f"FROM {GOLD_PREFIX}.fact_events "
-                f"{_where_clause(event_time_condition)} "
+                f"{_where_clause(_and_conditions([event_time_condition, event_filter_condition]))} "
                 "GROUP BY event_type "
                 "ORDER BY event_count DESC "
                 f"LIMIT {limit}"
@@ -498,16 +587,28 @@ def _deterministic_sql(
     if intent == "ranking":
         table_name = _selected_table(intent_result, "daily_event_summary")
         dimension_column = _dimension_column(dimension, table_name, metadata_context)
-        metric_column = _metric_column(metric, table_name, metadata_context)
         direction = "ASC" if intent_result.get("sort_direction") == "asc" else "DESC"
         if not dimension_column:
             return None
+        # Summary tables hold one row per (date, dimension); aggregate so a
+        # ranking reflects the whole period (and so any year/exclusion filter is
+        # applied before grouping), e.g. top brands by total views in 2020.
+        metric_columns = _metric_list(intent_result, table_name, metadata_context)
+        primary_metric = metric_columns[0] if metric_columns else _metric_column(metric, table_name, metadata_context)
+        select_aggregates = ", ".join(f"{_aggregate_expr(col)} AS {col}" for col in metric_columns or [primary_metric])
+        primary_aggregate = _aggregate_expr(primary_metric)
         time_condition, _applied = _time_filter_condition(table_name, metadata_context, intent_result.get("time_range"))
+        filter_condition = _filter_conditions(intent_result.get("filters"), table_name, metadata_context)
+        where_condition = _and_conditions([time_condition, filter_condition])
+        having_condition = _having_conditions(intent_result.get("filters"), primary_aggregate)
+        having_clause = f" HAVING {having_condition}" if having_condition else ""
         return (
-            f"SELECT {dimension_column}, {metric_column} "
-            f"FROM {GOLD_PREFIX}.{table_name} "
-            f"{_where_clause(time_condition)} "
-            f"ORDER BY {metric_column} {direction} "
+            f"SELECT {dimension_column}, {select_aggregates} "
+            f"FROM {GOLD_PREFIX}.{table_name}"
+            f"{_where_clause(where_condition)} "
+            f"GROUP BY {dimension_column}"
+            f"{having_clause} "
+            f"ORDER BY {primary_metric} {direction} "
             f"LIMIT {limit}"
         )
 
@@ -522,29 +623,63 @@ def _deterministic_sql(
     return None
 
 
+def _followup_user_prompt(question: str, previous_sql: str | None) -> str:
+    if not previous_sql:
+        return f"Question: {question}"
+    normalized_previous = " ".join(previous_sql.split())
+    return (
+        f"Question: {question}\n\n"
+        "This is a follow-up to a previous question in the same conversation. "
+        "The previous related query was:\n"
+        f"{normalized_previous}\n\n"
+        "Adjust that query to satisfy the new question - keep the parts that still "
+        "apply (metric, dimension, time filter) and add or change only what the new "
+        "message asks for (e.g. an exclusion/filter, a new time range, an extra "
+        "column, a different sort). Return SQL only."
+    )
+
+
 def generate_sql(
     question: str,
     intent_result: dict | None = None,
     metadata_context: dict | None = None,
+    *,
+    prefer_llm: bool = False,
+    previous_sql: str | None = None,
 ) -> str:
+    """Generate read-only Trino SQL for a question.
+
+    `prefer_llm` is set for conversational follow-ups: the deterministic
+    templates cannot express open-ended refinements (exclusions, ad-hoc filters,
+    extra columns), so the LLM generates the SQL instead, optionally refining the
+    `previous_sql` from the prior turn. Falls back to the deterministic path when
+    no Groq key is configured so behaviour degrades instead of failing.
+    """
     metadata_sql = _metadata_sql_for_question(question)
     if metadata_sql:
         return metadata_sql
 
-    deterministic_sql = _deterministic_sql(question, intent_result, metadata_context)
-    if deterministic_sql:
-        return deterministic_sql
+    if not prefer_llm:
+        deterministic_sql = _deterministic_sql(question, intent_result, metadata_context)
+        if deterministic_sql:
+            return deterministic_sql
 
     if not llm.llm_available():
+        # When the LLM was preferred (a follow-up) but no key is set, fall back
+        # to the deterministic templates rather than failing the whole turn.
+        if prefer_llm:
+            deterministic_sql = _deterministic_sql(question, intent_result, metadata_context)
+            if deterministic_sql:
+                return deterministic_sql
         raise ValueError("GROQ_API_KEY is not set")
 
     content = llm.chat_completion(
         [
             {"role": "system", "content": _build_focused_prompt(intent_result, metadata_context)},
-            {"role": "user", "content": f"Question: {question}"},
+            {"role": "user", "content": _followup_user_prompt(question, previous_sql if prefer_llm else None)},
         ],
         temperature=0,
-        max_tokens=250,
+        max_tokens=300,
     )
     sql = _clean_sql_response(content)
     if not sql:

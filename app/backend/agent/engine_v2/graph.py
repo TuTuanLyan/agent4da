@@ -30,7 +30,14 @@ from . import llm
 from .charts import recommend_chart
 from .checkpoint import new_checkpoint_id, save_checkpoint_snapshot
 from .config import GOLD_CATALOG, GOLD_PREFIX, GOLD_SCHEMA, MAX_SQL_RETRY_ATTEMPTS
-from .context import get_recent_context, resolve_followup, save_turn
+from .context import (
+    classify_followup,
+    get_recent_context,
+    llm_extract_patch,
+    llm_rewrite_followup,
+    save_turn,
+)
+from .spec import merge_spec, render_spec_question
 from .corrector import correct_sql
 from .insights import generate_insight, generate_llm_insight
 from .metadata import get_gold_tables, get_table_columns, select_metadata
@@ -50,8 +57,11 @@ class AgentState(TypedDict):
     effective_question: NotRequired[str]
     resolved_question: NotRequired[str | None]
     context_used: NotRequired[bool]
+    context_sql_followup: NotRequired[bool]
+    spec_ready: NotRequired[bool]
     previous_turn_id: NotRequired[int | None]
     previous_question: NotRequired[str | None]
+    previous_sql: NotRequired[str | None]
     context_notes: NotRequired[list[str]]
     recent_context: NotRequired[list[dict[str, Any]]]
     intent: NotRequired[str | None]
@@ -355,12 +365,17 @@ def initialize_node(state: AgentState) -> AgentState:
     return {
         **state,
         "effective_question": state["question"],
+        # Preserve any caller-provided context (durable history from query_runs);
+        # load_context_node falls back to the process store only when it is empty.
+        "recent_context": state.get("recent_context") or [],
         "resolved_question": None,
         "context_used": False,
+        "context_sql_followup": False,
+        "spec_ready": False,
         "previous_turn_id": None,
         "previous_question": None,
+        "previous_sql": None,
         "context_notes": [],
-        "recent_context": [],
         "intent": None,
         "dimension": None,
         "metric": None,
@@ -418,6 +433,10 @@ def initialize_node(state: AgentState) -> AgentState:
 
 
 def load_context_node(state: AgentState) -> AgentState:
+    # Durable history passed by the service (rehydrated from query_runs) wins so
+    # follow-ups survive restarts/multi-worker; otherwise use the process store.
+    if state.get("recent_context"):
+        return state
     return {**state, "recent_context": get_recent_context(state["session_id"], limit=5)}
 
 
@@ -456,68 +475,171 @@ def safety_node(state: AgentState) -> AgentState:
     }
 
 
-def resolve_followup_node(state: AgentState) -> AgentState:
-    followup = resolve_followup(state["question"], state.get("recent_context", []))
-    resolved_question = followup.get("resolved_question")
-    updates: AgentState = {
-        **state,
-        "context_used": bool(followup.get("context_used")),
-        "resolved_question": resolved_question,
-        "previous_turn_id": followup.get("previous_turn_id"),
-        "previous_question": followup.get("previous_question"),
-        "context_notes": list(followup.get("context_notes") or []),
+def _state_from_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    """Mirror a merged Active Query Spec onto the individual state fields the
+    downstream nodes read (so we can skip a fresh NLU parse for refinements)."""
+    return {
+        "intent_result": dict(spec),
+        "intent": spec.get("intent"),
+        "dimension": spec.get("dimension"),
+        "metric": spec.get("metric"),
+        "analysis_type": spec.get("analysis_type"),
+        "time_range": spec.get("time_range"),
+        "time_grain": spec.get("time_grain"),
+        "filters": spec.get("filters", []),
+        "comparison_entities": spec.get("comparison_entities", []),
+        "sort_direction": spec.get("sort_direction"),
+        "extracted_entities": spec.get("extracted_entities", {}),
+        "nlu_confidence": spec.get("nlu_confidence", "high"),
+        "table_candidates": spec.get("table_candidates", []),
+        "needs_metadata": spec.get("needs_metadata", True),
+        "limit": spec.get("limit", 10),
     }
 
-    if resolved_question:
-        updates["effective_question"] = resolved_question
 
-    if followup.get("action") == "reuse_chart":
-        chart = followup.get("chart") or _empty_chart("Không có chart recommendation ở lượt trước.")
-        updates.update(
-            {
-                "generated_sql": followup.get("generated_sql") or "",
-                "used_tables": followup.get("used_tables") or _used_tables(followup.get("generated_sql") or ""),
-                "row_count": int(followup.get("row_count") or 0),
-                "rows": [],
-                "answer": followup.get("answer") or "Dưới đây là gợi ý biểu đồ cho kết quả trước.",
-                "chart": chart,
-                "chart_type": _chart_type(chart),
-                "chart_data": _chart_data(chart),
-                "confidence": "high",
-                "validation_notes": ["Reused previous chart recommendation without executing a new query."],
-                "insight_source": "rule_based",
-                "llm_insight_used": False,
-                "intent": followup.get("intent") or "chart_previous",
-                "table_candidates": followup.get("table_candidates") or [],
-                "status": "success",
-                "error_message": None,
-                "terminal_action": "direct_response",
-            }
-        )
+def _apply_reuse_chart(updates: AgentState, followup: dict[str, Any]) -> AgentState:
+    chart = followup.get("chart") or _empty_chart("Không có chart recommendation ở lượt trước.")
+    updates.update(
+        {
+            "generated_sql": followup.get("generated_sql") or "",
+            "used_tables": followup.get("used_tables") or _used_tables(followup.get("generated_sql") or ""),
+            "row_count": int(followup.get("row_count") or 0),
+            "rows": [],
+            "answer": followup.get("answer") or "Dưới đây là gợi ý biểu đồ cho kết quả trước.",
+            "chart": chart,
+            "chart_type": _chart_type(chart),
+            "chart_data": _chart_data(chart),
+            "confidence": "high",
+            "validation_notes": ["Reused previous chart recommendation without executing a new query."],
+            "insight_source": "rule_based",
+            "llm_insight_used": False,
+            "intent": followup.get("intent") or "chart_previous",
+            "table_candidates": followup.get("table_candidates") or [],
+            "status": "success",
+            "error_message": None,
+            "terminal_action": "direct_response",
+        }
+    )
+    return updates
 
-    if followup.get("action") == "explain_sql":
-        updates.update(
-            {
-                "generated_sql": followup.get("generated_sql") or "",
-                "used_tables": followup.get("used_tables") or _used_tables(followup.get("generated_sql") or ""),
-                "row_count": 0,
-                "rows": [],
-                "answer": followup.get("answer") or "Không có SQL trước đó để giải thích trong session này.",
-                "chart": _empty_chart("Câu hỏi giải thích SQL nên hiển thị dạng text."),
-                "chart_type": None,
-                "chart_data": [],
-                "confidence": "high",
-                "validation_notes": ["Explained previous SQL without executing a new query."],
-                "insight_source": "rule_based",
-                "llm_insight_used": False,
-                "intent": "explain_sql",
-                "table_candidates": followup.get("table_candidates") or [],
-                "status": "success",
-                "error_message": None,
-                "terminal_action": "direct_response",
-            }
-        )
 
+def _apply_explain_sql(updates: AgentState, followup: dict[str, Any]) -> AgentState:
+    updates.update(
+        {
+            "generated_sql": followup.get("generated_sql") or "",
+            "used_tables": followup.get("used_tables") or _used_tables(followup.get("generated_sql") or ""),
+            "row_count": 0,
+            "rows": [],
+            "answer": followup.get("answer") or "Không có SQL trước đó để giải thích trong session này.",
+            "chart": _empty_chart("Câu hỏi giải thích SQL nên hiển thị dạng text."),
+            "chart_type": None,
+            "chart_data": [],
+            "confidence": "high",
+            "validation_notes": ["Explained previous SQL without executing a new query."],
+            "insight_source": "rule_based",
+            "llm_insight_used": False,
+            "intent": "explain_sql",
+            "table_candidates": followup.get("table_candidates") or [],
+            "status": "success",
+            "error_message": None,
+            "terminal_action": "direct_response",
+        }
+    )
+    return updates
+
+
+def resolve_followup_node(state: AgentState) -> AgentState:
+    """Classify the turn into an operation on the session's Active Query Spec.
+
+    refine/entity_ref produce a merged spec the SQL pipeline runs directly
+    (spec_ready, skipping a fresh NLU parse); presentation reuses the prior
+    result; meta routes to the conversational assistant; reset/new_query run
+    normally; ambiguous falls back to the LLM rewriter.
+    """
+    recent_context = state.get("recent_context", [])
+    cls = classify_followup(state["question"], recent_context)
+    op = cls.get("op")
+    updates: AgentState = {
+        **state,
+        "context_used": bool(cls.get("context_used")),
+        "context_notes": list(cls.get("context_notes") or []),
+        "previous_turn_id": cls.get("previous_turn_id"),
+        "previous_question": cls.get("previous_question"),
+    }
+
+    if op == "presentation":
+        followup = cls["followup"]
+        updates["context_used"] = True
+        updates["context_notes"] = list(followup.get("context_notes") or [])
+        updates["previous_turn_id"] = followup.get("previous_turn_id")
+        updates["previous_question"] = followup.get("previous_question")
+        if followup.get("action") == "reuse_chart":
+            return _apply_reuse_chart(updates, followup)
+        return _apply_explain_sql(updates, followup)
+
+    if op == "meta":
+        updates["terminal_action"] = "conversational"
+        return updates
+
+    if op == "reset":
+        return {**updates, "context_used": False, "context_sql_followup": False, "effective_question": state["question"]}
+
+    if op == "clarification_answer":
+        resolved = cls.get("resolved_question") or state["question"]
+        updates["effective_question"] = resolved
+        updates["resolved_question"] = resolved
+        updates["context_used"] = True
+        updates["context_notes"] = ["Resolved a clarification answer from the prior suggestions."]
+        return updates
+
+    if op in ("refine", "entity_ref"):
+        spec = cls["merged_spec"]
+        updates.update(_state_from_spec(spec))
+        updates["spec_ready"] = True
+        updates["context_used"] = True
+        updates["effective_question"] = render_spec_question(spec)
+        updates["resolved_question"] = render_spec_question(spec)
+        updates["previous_sql"] = cls.get("previous_sql") or ""
+        return updates
+
+    if op == "ambiguous":
+        # First try a typed LLM patch on the prior spec (precise, validated);
+        # fall back to the string rewriter only if that yields nothing.
+        prev_spec = cls.get("prev_spec")
+        patch = llm_extract_patch(state["question"], recent_context) if prev_spec else None
+        if patch:
+            merged = merge_spec(prev_spec, patch)
+            updates.update(_state_from_spec(merged))
+            updates["spec_ready"] = True
+            updates["context_used"] = True
+            updates["effective_question"] = render_spec_question(merged)
+            updates["resolved_question"] = render_spec_question(merged)
+            updates["context_notes"] = ["Resolved an ambiguous follow-up via an LLM patch on the prior spec."]
+            updates["previous_question"] = cls.get("previous_question")
+            updates["previous_turn_id"] = cls.get("previous_turn_id")
+            return updates
+
+        rewrite = llm_rewrite_followup(state["question"], recent_context)
+        if rewrite.get("is_followup"):
+            standalone = rewrite["standalone_question"]
+            notes = list(updates.get("context_notes") or [])
+            notes.append(rewrite.get("reason") or "Resolved a contextual follow-up via LLM rewrite.")
+            updates.update(
+                {
+                    "effective_question": standalone,
+                    "resolved_question": standalone,
+                    "context_used": True,
+                    "context_sql_followup": True,
+                    "previous_sql": rewrite.get("previous_sql") or "",
+                    "previous_turn_id": rewrite.get("previous_turn_id"),
+                    "previous_question": rewrite.get("previous_question"),
+                    "context_notes": notes,
+                }
+            )
+        return updates
+
+    # new_query
+    updates["context_used"] = False
     return updates
 
 
@@ -726,10 +848,13 @@ def ambiguity_check_node(state: AgentState) -> AgentState:
 
 
 def text_to_sql_node(state: AgentState) -> AgentState:
+    context_followup = bool(state.get("context_sql_followup"))
     generated_sql = generate_sql(
         state.get("effective_question") or state["question"],
         intent_result=state.get("intent_result"),
         metadata_context=state.get("metadata_context"),
+        prefer_llm=context_followup,
+        previous_sql=state.get("previous_sql") if context_followup else None,
     )
     applied_time_filter = resolve_applied_time_filter(
         state.get("intent_result"),
@@ -1002,8 +1127,15 @@ def route_after_safety(state: AgentState) -> str:
 
 
 def route_after_followup(state: AgentState) -> str:
-    if state.get("terminal_action") == "direct_response":
+    terminal = state.get("terminal_action")
+    if terminal == "direct_response":
         return "suggestion_generation"
+    if terminal == "conversational":
+        return "assistive_clarification"
+    if state.get("spec_ready"):
+        # refine/entity_ref already produced a complete intent_result; skip the
+        # fresh NLU parse and go straight to metadata + SQL.
+        return "metadata"
     return "intent_router"
 
 
@@ -1012,6 +1144,11 @@ def route_after_intent(state: AgentState) -> str:
     if intent in {"metadata_tables", "metadata_columns"}:
         return "metadata_answer"
     if intent == "unsupported":
+        # A follow-up refinement (e.g. "bỏ qua nhãn hàng unknown") may not classify
+        # on its own; the LLM already rewrote it into a standalone question, so run
+        # the SQL pipeline instead of returning a clarification.
+        if state.get("context_sql_followup"):
+            return "metadata"
         return "assistive_clarification"
     return "metadata"
 
@@ -1077,7 +1214,12 @@ def _build_graph():
     builder.add_conditional_edges(
         "resolve_followup",
         route_after_followup,
-        {"suggestion_generation": "suggestion_generation", "intent_router": "intent_router"},
+        {
+            "suggestion_generation": "suggestion_generation",
+            "intent_router": "intent_router",
+            "assistive_clarification": "assistive_clarification",
+            "metadata": "metadata",
+        },
     )
     builder.add_conditional_edges(
         "intent_router",
@@ -1129,12 +1271,14 @@ def run_agent_graph(
     question: str,
     user_id: str | None = None,
     run_id: str | None = None,
+    recent_context: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     initial_state: AgentState = {
         "session_id": session_id,
         "user_id": user_id,
         "run_id": run_id,
         "question": question,
+        "recent_context": recent_context or [],
         "start_time": time.perf_counter(),
     }
     try:

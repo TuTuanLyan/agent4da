@@ -53,7 +53,11 @@ from auth.deps import current_user  # noqa: E402
 from agent.contextual_learning import rank_contextual_suggestions  # noqa: E402
 from agent import router as agent_router_module  # noqa: E402
 from agent.router import router as agent_router  # noqa: E402
-from agent.service import session_title_from_question, update_session_after_run  # noqa: E402
+from agent.service import (  # noqa: E402
+    recent_session_context,
+    session_title_from_question,
+    update_session_after_run,
+)
 
 
 # --- Test harness -----------------------------------------------------------
@@ -252,6 +256,111 @@ def test_auto_title_from_first_question(client):
         s.commit()
         s.refresh(chat)
         assert chat.title == "Top 5 brands by revenue last month"
+    finally:
+        s.close()
+
+
+def _insert_v2_run(
+    SessionLocal,
+    *,
+    user_id,
+    session_id,
+    turn_index,
+    question,
+    generated_sql=None,
+    summary_text=None,
+    agent_trace=None,
+    chart_payload=None,
+    row_count=0,
+    status="success",
+):
+    s = SessionLocal()
+    try:
+        run = QueryRun(
+            id=uuid.uuid4(),
+            user_id=user_id,
+            session_id=session_id,
+            turn_index=turn_index,
+            question=question,
+            generated_sql=generated_sql,
+            summary_text=summary_text,
+            agent_trace=agent_trace,
+            chart_payload=chart_payload,
+            row_count=row_count,
+            status=status,
+            agent_engine="v2",
+        )
+        s.add(run)
+        s.commit()
+        return run.id
+    finally:
+        s.close()
+
+
+def test_recent_session_context_rehydrates_from_query_runs(client):
+    sid = uuid.UUID(client.post("/agent/sessions").json()["id"])
+    _insert_v2_run(
+        client.SessionLocal,
+        user_id=client.user_a,
+        session_id=sid,
+        turn_index=1,
+        question="Nhãn hàng nào có số lượt xem nhiều nhất trong 2020",
+        generated_sql="SELECT brand, view_count FROM iceberg.gold.daily_brand_summary ORDER BY view_count DESC LIMIT 10",
+        summary_text="Nhãn hàng đứng đầu là ...",
+        agent_trace={
+            "intent": "ranking",
+            "used_tables": ["iceberg.gold.daily_brand_summary"],
+            "table_candidates": ["daily_brand_summary"],
+            "assumptions": ["assumed 2020"],
+            "clarification_suggestions": [],
+        },
+        chart_payload={"recommended": True, "type": "bar"},
+        row_count=10,
+    )
+    _insert_v2_run(
+        client.SessionLocal,
+        user_id=client.user_a,
+        session_id=sid,
+        turn_index=2,
+        question="Bỏ qua nhãn hàng unknown",
+        status="success",
+    )
+
+    s = client.SessionLocal()
+    try:
+        turns = recent_session_context(s, sid, client.user_a)
+    finally:
+        s.close()
+
+    # Newest-first, matching the in-process store's contract.
+    assert [t["question"] for t in turns] == [
+        "Bỏ qua nhãn hàng unknown",
+        "Nhãn hàng nào có số lượt xem nhiều nhất trong 2020",
+    ]
+    # The older ranking turn round-trips its trace/chart back into turn shape.
+    ranking = turns[1]
+    assert ranking["intent"] == "ranking"
+    assert ranking["generated_sql"].startswith("SELECT brand, view_count")
+    assert ranking["table_candidates"] == ["daily_brand_summary"]
+    assert ranking["chart"]["type"] == "bar"
+    assert ranking["status"] == "success"
+    assert ranking["row_count"] == 10
+
+
+def test_recent_session_context_is_user_scoped(client):
+    sid = uuid.UUID(client.post("/agent/sessions").json()["id"])
+    _insert_v2_run(
+        client.SessionLocal,
+        user_id=client.user_a,
+        session_id=sid,
+        turn_index=1,
+        question="A's question",
+    )
+    s = client.SessionLocal()
+    try:
+        # User B must not pull user A's turns even with the right session id.
+        assert recent_session_context(s, sid, client.user_b) == []
+        assert len(recent_session_context(s, sid, client.user_a)) == 1
     finally:
         s.close()
 

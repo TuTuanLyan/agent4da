@@ -7,7 +7,7 @@ from groq import Groq
 
 load_dotenv()
 
-DEFAULT_MODEL = "llama-3.1-8b-instant"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
 GOLD_CATALOG = "iceberg_catalog"
 GOLD_SCHEMA = "gold"
 SEMANTIC_TABLE_CATALOG = f"{GOLD_CATALOG}.metadata.semantic_table_catalog"

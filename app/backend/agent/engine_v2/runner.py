@@ -57,6 +57,7 @@ def _agent_trace(response: Dict[str, Any]) -> Dict[str, Any]:
         "time_range",
         "time_grain",
         "applied_time_filter",
+        "limit",
         "filters",
         "comparison_entities",
         "sort_direction",
@@ -128,8 +129,14 @@ def run_agent_state_v2(
     session_id: str,
     user_id: Optional[str] = None,
     run_id: Optional[str] = None,
+    recent_context: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Run the v2 graph and return the normalized persistence state."""
+    """Run the v2 graph and return the normalized persistence state.
+
+    `recent_context` is the durable, newest-first prior-turn history (from
+    `query_runs`); when provided it is the source of follow-up context instead of
+    the process-local store.
+    """
     from .graph import run_agent_graph
 
     response = run_agent_graph(
@@ -137,5 +144,6 @@ def run_agent_state_v2(
         question=question,
         user_id=user_id,
         run_id=run_id,
+        recent_context=recent_context,
     )
     return response_to_state(response)

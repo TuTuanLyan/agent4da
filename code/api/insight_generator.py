@@ -12,7 +12,7 @@ except ModuleNotFoundError:
 
 load_dotenv()
 
-DEFAULT_MODEL = "llama-3.1-8b-instant"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
 LLM_INSIGHT_INTENTS = {
     "metric_overview",
     "ranking",

@@ -11,7 +11,7 @@ except ModuleNotFoundError:
 
 load_dotenv()
 
-DEFAULT_MODEL = "llama-3.1-8b-instant"
+DEFAULT_MODEL = "llama-3.3-70b-versatile"
 MAX_SQL_RETRY_ATTEMPTS = 3
 DANGEROUS_KEYWORDS = (
     "INSERT",
