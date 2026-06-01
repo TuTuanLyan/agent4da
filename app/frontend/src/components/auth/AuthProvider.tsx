@@ -17,6 +17,7 @@ interface AuthState {
   user: AuthUser | null;
   loading: boolean;
   signIn: (email: string, password: string) => Promise<void>;
+  signUp: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   refresh: () => Promise<void>;
   updateUser: (patch: Partial<AuthUser>) => void;
@@ -70,6 +71,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [router],
   );
 
+  const signUp = useCallback(
+    async (email: string, password: string) => {
+      const res = await api.post<TokenResponse>("/auth/register", {
+        json: { email, password },
+        skipRefresh: true,
+      });
+      setAccessToken(res.access_token);
+      setUser(res.user);
+      router.replace("/ask");
+    },
+    [router],
+  );
+
   const signOut = useCallback(async () => {
     try {
       await api.post("/auth/logout", { skipRefresh: true });
@@ -97,8 +111,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [loading, user, pathname, router]);
 
   const value = useMemo<AuthState>(
-    () => ({ user, loading, signIn, signOut, refresh, updateUser }),
-    [user, loading, signIn, signOut, refresh, updateUser],
+    () => ({ user, loading, signIn, signUp, signOut, refresh, updateUser }),
+    [user, loading, signIn, signUp, signOut, refresh, updateUser],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

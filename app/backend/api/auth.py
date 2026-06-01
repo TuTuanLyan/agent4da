@@ -27,6 +27,11 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1, max_length=200)
 
 
+class RegisterRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=8, max_length=200)
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -229,6 +234,32 @@ def token_response(conn, response: Response, user: dict, settings: Settings) -> 
         "expires_in": expires_in,
         "user": user_payload(user, prefs),
     }
+
+
+@router.post("/register", status_code=201)
+def register(body: RegisterRequest, response: Response, settings: Settings = Depends(get_settings)) -> dict:
+    email = body.email.strip().lower()
+    if "@" not in email or email.startswith("@") or email.endswith("@"):
+        raise HTTPException(status_code=422, detail="Please enter a valid email address.")
+
+    with db_conn() as conn:
+        existing = conn.execute(
+            "SELECT id FROM app.users WHERE lower(email) = lower(%s)",
+            (email,),
+        ).fetchone()
+        if existing:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This email is already registered.")
+
+        user_id = uuid4()
+        conn.execute(
+            """
+            INSERT INTO app.users (id, email, password_hash, role)
+            VALUES (%s, %s, %s, 'user')
+            """,
+            (user_id, email, hash_password(body.password)),
+        )
+        user = conn.execute("SELECT * FROM app.users WHERE id = %s", (user_id,)).fetchone()
+        return token_response(conn, response, user, settings)
 
 
 @router.post("/login")
