@@ -1,5 +1,15 @@
 import os
 
+try:  # observability is optional and must never break query execution
+    from services.obs_metrics import observe_trino_query
+except Exception:  # pragma: no cover
+    from contextlib import contextmanager
+
+    @contextmanager
+    def observe_trino_query():
+        yield
+
+
 _CONNECTIONS = {}
 
 
@@ -51,8 +61,9 @@ def execute_query(connection, query):
     cursor = None
     try:
         cursor = connection.cursor()
-        cursor.execute(query)
-        results = cursor.fetchall()
+        with observe_trino_query():
+            cursor.execute(query)
+            results = cursor.fetchall()
         return results
     except Exception as e:
         print(f"[Trino] Failed to execute query: {e}")
@@ -78,8 +89,10 @@ def execute_query_to_dicts(connection, query, raise_on_error=False):
     cursor = None
     try:
         cursor = connection.cursor()
-        cursor.execute(query)
-        return [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        with observe_trino_query():
+            cursor.execute(query)
+            rows = [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        return rows
     except Exception as e:
         print(f"[Trino] Failed to execute query: {e}")
         if raise_on_error:

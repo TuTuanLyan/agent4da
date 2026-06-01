@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from .auth import current_user
 from .db import db_conn, json_param, json_ready
 from .integrations import ensure_code_paths
+from .obs_metrics import observe_ask
 from .settings import bridge_agent_env, get_settings
 
 router = APIRouter(prefix="/agent", tags=["agent"])
@@ -340,6 +341,31 @@ def persist_run(conn, user_id: UUID, session: dict, payload: dict) -> dict:
 
 
 async def execute_question(
+    *,
+    question: str,
+    user: dict,
+    session_id: Optional[str],
+    run_id: Optional[str] = None,
+    chart_type: Optional[str] = "auto",
+) -> dict:
+    """Thin wrapper that records Prometheus /ask metrics around the run.
+
+    Both POST /agent/ask and GET /agent/stream call this, so instrumenting here
+    covers every agent invocation in one place.
+    """
+    metric_started = time.perf_counter()
+    payload = await _execute_question(
+        question=question,
+        user=user,
+        session_id=session_id,
+        run_id=run_id,
+        chart_type=chart_type,
+    )
+    observe_ask(payload, time.perf_counter() - metric_started)
+    return payload
+
+
+async def _execute_question(
     *,
     question: str,
     user: dict,

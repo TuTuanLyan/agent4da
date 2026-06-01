@@ -1,0 +1,141 @@
+# =============================================================================
+# alert_rules.yml  --  Agent4DA Monitoring & Observability module
+#
+# These rules evaluate inside Prometheus and are visible at
+#   http://localhost:19090/alerts
+#
+# By default NO Alertmanager / notification channel is wired up (kept simple
+# for the demo). To send notifications, run an Alertmanager, then uncomment the
+# `alerting:` block in prometheus.yml. The rules below require no changes.
+# =============================================================================
+
+groups:
+  # ---------------------------------------------------------------------------
+  - name: service-availability
+    rules:
+      - alert: BackendDown
+        expr: up{job="agent-backend"} == 0
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "FastAPI / AI Agent backend is down"
+          description: "Prometheus cannot scrape agent4da:8000/metrics for >1m."
+
+      - alert: PostgresDown
+        # pg_up comes from postgres-exporter; falls back to scrape target down.
+        expr: (pg_up == 0) or (up{job="postgres-exporter"} == 0)
+        for: 1m
+        labels: { severity: critical }
+        annotations:
+          summary: "PostgreSQL is unreachable"
+          description: "postgres-exporter reports the database as down for >1m."
+
+      - alert: TrinoDown
+        expr: up{job="trino"} == 0
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "Trino metrics endpoint is down"
+          description: "Prometheus cannot scrape trino:8080/metrics for >2m."
+
+      - alert: NodeExporterDown
+        expr: up{job="node-exporter"} == 0
+        for: 2m
+        labels: { severity: warning }
+        annotations:
+          summary: "Host node-exporter is down"
+          description: "Host-level CPU/memory/disk metrics are unavailable."
+
+  # ---------------------------------------------------------------------------
+  - name: ai-agent-performance
+    rules:
+      - alert: HighAskErrorRate
+        expr: |
+          sum(rate(agent4da_ask_errors_total[5m]))
+            /
+          clamp_min(sum(rate(agent4da_ask_requests_total[5m])), 0.0001) > 0.2
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "AI Agent /ask error rate above 20%"
+          description: "More than 20% of /ask requests failed over the last 5m."
+
+      - alert: HighAskLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(agent4da_ask_duration_seconds_bucket[5m])) by (le)
+          ) > 20
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "AI Agent p95 response time above 20s"
+          description: "95th percentile of total /ask response time exceeds 20s."
+
+  # ---------------------------------------------------------------------------
+  - name: query-performance
+    rules:
+      - alert: HighTrinoQueryLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum(rate(agent4da_trino_query_duration_seconds_bucket[5m])) by (le)
+          ) > 10
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "Trino query p95 latency above 10s (agent side)"
+          description: "Agent-executed Trino queries are slow (p95 > 10s)."
+
+  # ---------------------------------------------------------------------------
+  - name: etl-pipeline
+    rules:
+      - alert: ETLPipelineFailed
+        # last_run_status: 1=success, 0=failed, -1=unknown/running/none.
+        expr: agent4da_etl_pipeline_last_run_status == 0
+        for: 5m
+        labels: { severity: warning }
+        annotations:
+          summary: "ETL pipeline {{ $labels.dag_id }} last run FAILED"
+          description: "Airflow DAG {{ $labels.dag_id }} ({{ $labels.layer }}) last run state is failed."
+
+      - alert: GoldLayerStale
+        # Fires if the Gold pipeline has not had a successful run in 24h.
+        expr: |
+          (time() - agent4da_etl_pipeline_last_success_timestamp_seconds{dag_id="gold_pipeline"} > 86400)
+          and (agent4da_etl_pipeline_last_success_timestamp_seconds{dag_id="gold_pipeline"} > 0)
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Gold layer not refreshed in 24h"
+          description: "No successful gold_pipeline run detected in the last 24 hours."
+
+  # ---------------------------------------------------------------------------
+  - name: host-resources
+    rules:
+      - alert: HighHostCPU
+        expr: |
+          100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 90
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Host CPU usage above 90%"
+          description: "Average host CPU usage has exceeded 90% for 10m."
+
+      - alert: HighHostMemory
+        expr: |
+          (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 90
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Host memory usage above 90%"
+          description: "Host available memory has dropped below 10% for 10m."
+
+      - alert: LowRootDiskSpace
+        expr: |
+          (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) * 100 < 10
+        for: 10m
+        labels: { severity: warning }
+        annotations:
+          summary: "Root filesystem below 10% free"
+          description: "Less than 10% disk space remaining on / for 10m."
