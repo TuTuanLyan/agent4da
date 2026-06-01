@@ -1,5 +1,9 @@
 # Agent FastAPI
 
+Current frontend backend: `app/backend/api/main.py`, Docker service
+`agent-api`, container `agent4da`, Swagger at `http://localhost:8083/docs`.
+The older `localhost:8001` notes below refer to the standalone legacy agent.
+
 Tai lieu nay mo ta phan AI Agent theo Solution Design Specification: Text-to-SQL
 cho lop Gold ecommerce, chi doc du lieu, co guardrail truoc khi truy van Trino,
 va expose API FastAPI de thu tai `localhost:8001/docs`.

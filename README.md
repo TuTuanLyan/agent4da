@@ -58,9 +58,8 @@ hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
   `docker compose --scale spark-worker=2`. Muon demo 1 master + 2 worker can
   sua compose thanh `spark-worker-1` va `spark-worker-2`, hoac bo
   `container_name` de scale.
-- Chua co `docker-compose.agent.yml` hoac Dockerfile rieng cho Agent FastAPI.
-  Agent hien chay bang Python/conda env tren host:
-  `code/agent/main_agent.py`.
+- Backend FastAPI cho frontend da co trong `app/backend` va chay bang
+  `docker-compose.agent.yml`; engine LangGraph van tai su dung `code/agent`.
 - Metadata docs dang co diem lech voi code moi. File
   `docs/GOLD_METADATA_PIPELINE.md` con nhac cac bang
   `table_catalog`, `column_catalog`, `metric_catalog`, `join_catalog`, nhung
@@ -73,10 +72,8 @@ hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
   chua thay trong code runtime hien tai.
 - Gold refresh mode hien tai la `full_refresh`; incremental/MERGE chua
   implement.
-- `Makefile all-up` co the gay nham lan vi `docker-compose.airflow.yml` da gom
-  PostgreSQL ben trong, trong khi repo cung co `docker-compose.postgre.yml`
-  rieng. Khong nen start 2 PostgreSQL compose rieng cung luc neu cung
-  `container_name: postgres-db`.
+- `Makefile all-up` dung `docker-compose.airflow.yml` lam PostgreSQL shared
+  stack, nen khong start `docker-compose.postgre.yml` rieng trong luong all-up.
 - `envs/`, `jars/`, `data/`, `log/` dang bi gitignore. Khi deploy sang may
   khac phai copy/generate lai cac file nay.
 - Kafka compose dang advertise listener ngoai la `localhost:9092`; dung tot khi
@@ -146,7 +143,7 @@ hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
 | PostgreSQL | `docker-compose.airflow.yml` hoac `docker-compose.postgre.yml` | `5432` | Airflow metadata + Iceberg JDBC catalog schemas |
 | Airflow | `docker-compose.airflow.yml` | `8081`, `8793` | LocalExecutor, SparkSubmitOperator |
 | Trino | `docker-compose.trino.yml` | `8082` | Query Iceberg/Postgres |
-| Agent API | chua co compose | `8001` | Chay bang Python host/conda env |
+| Agent backend | `docker-compose.agent.yml` | `8083` | FastAPI backend container `agent4da`, phuc vu frontend |
 
 Tat ca compose file dang dung external Docker network:
 
@@ -381,37 +378,35 @@ ORDER BY table_name;
 Luu y: Trino config dang set `iceberg.jdbc-catalog.schema-version=V0` de khop
 voi Spark/Iceberg JDBC catalog hien tai.
 
-## 7. Agent API
+## 7. Agent Backend
 
 Entry point:
 
 ```text
-code/agent/main_agent.py
+app/backend/api/main.py
 ```
 
-Chay local:
+Chay bang Docker:
 
 ```bash
-cd code/agent
-AGENT_API_PORT=8001 /opt/miniconda/envs/agent4daenv/bin/python -m uvicorn main_agent:app --host 0.0.0.0 --port 8001
+docker compose -f docker-compose.agent.yml up -d --build
 ```
 
 Swagger UI:
 
 ```text
-http://localhost:8001/docs
+http://localhost:8083/docs
 ```
 
 Endpoints chinh:
 
-- `GET /health`
-- `GET /api/v1/health`
-- `GET /api/v1/metadata`
-- `GET /api/v1/schema-context`
-- `POST /api/v1/guard/question`
-- `POST /api/v1/guard/sql`
-- `POST /ask`
-- `POST /api/v1/ask`
+- `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`
+- `GET /agent/stream`, `POST /agent/ask`, `/agent/sessions`, `/agent/runs/{run_id}/export.csv`
+- `/history`, `/catalog`, `/metrics`, `/pipelines`, `/settings`, `/ops/health`, `/quickstats`
+
+Backend dung lai `code/agent` lam engine LangGraph va mount `./code` read-only
+vao container. Neu muon hoi dap Text-to-SQL that, dien `GROQ_API_KEY` trong
+`envs/groq.env`, restart container `agent4da`, va dam bao Trino/Gold tables da san sang.
 
 LangGraph flow:
 
@@ -470,6 +465,7 @@ docker compose -f docker-compose.minio.yml up -d
 docker compose -f docker-compose.spark.yml up -d
 docker compose -f docker-compose.airflow.yml up -d
 docker compose -f docker-compose.trino.yml up -d
+docker compose -f docker-compose.agent.yml up -d --build
 ```
 
 Khong can chay `docker-compose.postgre.yml` rieng neu da chay
@@ -497,7 +493,8 @@ Spark UI:   http://localhost:8080
 Airflow:    http://localhost:8081
 MinIO:      http://localhost:9001
 Trino:      http://localhost:8082
-Agent API:  http://localhost:8001/docs
+Backend:    http://localhost:8083/docs
+Frontend:   http://localhost:3000
 ```
 
 ## 9. Ke hoach deploy len GCP
@@ -570,11 +567,10 @@ May VM nen can nhac cho demo:
    SPARK_WORKER_MEMORY=2g
    ```
 
-2. Tao service/Dockerfile cho Agent API.
+2. Build service Agent backend.
 
-   Hien tai Agent chay bang conda env tren host. De deploy gon, nen tao
-   `docker-compose.agent.yml` hoac them service `agent-api` dung Python image,
-   install dependency va expose port `8001`.
+   Repo da co `docker-compose.agent.yml` va `app/backend/Dockerfile`. Service
+   la `agent-api`, container name la `agent4da`, expose port `8083`.
 
 3. Dieu chinh env cho cloud.
 
@@ -589,7 +585,7 @@ May VM nen can nhac cho demo:
 
    Khuyen nghi an toan cho demo:
 
-   - Public chi mo `8001` cho Agent API neu can nguoi khac truy cap.
+   - Public chi mo `8083` cho Agent backend neu can nguoi khac truy cap.
    - Cac UI quan tri nhu Airflow `8081`, Spark `8080`, MinIO `9001`, Trino
      `8082` nen dung SSH tunnel hoac firewall source IP rieng.
 
@@ -631,13 +627,13 @@ May VM nen can nhac cho demo:
    docker compose -f docker-compose.trino.yml up -d
    ```
 
-10. Start Agent API bang Docker service moi hoac bang Python/conda tren VM.
+10. Start Agent backend bang `docker-compose.agent.yml`.
 11. Gui data vao Kafka bang producer.
 12. Chay Bronze/Silver hoac bat DAG Airflow.
 13. Trigger `gold_pipeline`.
 14. Trigger `gold_metadata_pipeline`.
 15. Test Trino query Gold va metadata.
-16. Test Agent endpoint `/api/v1/ask`.
+16. Test backend endpoint `/agent/ask` hoac `/agent/stream` qua frontend.
 
 ### Firewall/port goi y
 
@@ -645,7 +641,7 @@ Mo toi thieu:
 
 ```text
 tcp:22    SSH
-tcp:8001  Agent API neu can public
+tcp:8083  Agent backend neu can public
 ```
 
 Chi mo khi can demo/debug, va nen restrict source IP:
@@ -669,7 +665,7 @@ tcp:9092  Kafka
 Dung SSH tunnel neu chi ban truy cap:
 
 ```bash
-ssh -L 8001:localhost:8001 -L 8081:localhost:8081 -L 8080:localhost:8080 -L 9001:localhost:9001 -L 8082:localhost:8082 <user>@<vm-external-ip>
+ssh -L 8083:localhost:8083 -L 3000:localhost:3000 -L 8081:localhost:8081 -L 8080:localhost:8080 -L 9001:localhost:9001 -L 8082:localhost:8082 <user>@<vm-external-ip>
 ```
 
 ## 10. Phuong an deploy that su phan tan hon
@@ -717,9 +713,10 @@ $300.
   SELECT * FROM iceberg.metadata.semantic_table_catalog LIMIT 10;
   ```
 
-- Agent `/api/v1/metadata` tra ve source `trino` neu metadata da san sang, hoac
-  `static_definitions` neu fallback.
-- Agent `/api/v1/ask` sinh SQL read-only, query Trino va tra ve rows/insight.
+- Backend `/catalog/tables` tra ve source metadata tu Trino neu san sang, hoac
+  fallback tu static definitions trong `code/spark/gold/metadata_definitions.py`.
+- Backend `/agent/ask` va `/agent/stream` sinh SQL read-only, query Trino va
+  tra ve rows/insight cho frontend.
 
 ## 12. Tai lieu lien quan
 

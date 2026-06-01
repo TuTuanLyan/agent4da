@@ -3,7 +3,8 @@
 # ==============================
 
 # Danh sách service
-SERVICES := kafka spark minio postgre airflow trino
+SERVICES := kafka spark minio postgre airflow trino agent
+STACK_SERVICES := kafka spark minio airflow trino agent
 
 # Tên file compose
 COMPOSE_kafka    := docker-compose.kafka.yml
@@ -12,6 +13,7 @@ COMPOSE_minio    := docker-compose.minio.yml
 COMPOSE_postgre := docker-compose.postgre.yml
 COMPOSE_airflow := docker-compose.airflow.yml
 COMPOSE_trino    := docker-compose.trino.yml
+COMPOSE_agent    := docker-compose.agent.yml
 
 # ==============================
 # Helper macro
@@ -49,7 +51,7 @@ $(eval $(svc)-restart: ; @$(call compose_restart,$(COMPOSE_$(svc)))) \
 # ==============================
 
 all-up:
-	@for svc in $(SERVICES); do \
+	@for svc in $(STACK_SERVICES); do \
 		echo "Starting $$svc..."; \
 		docker compose -f docker-compose.$$svc.yml up -d; \
 	done
@@ -59,7 +61,7 @@ all-up:
 # ==============================
 
 all-down:
-	@for svc in $(SERVICES); do \
+	@for svc in $(STACK_SERVICES); do \
 		echo "Stopping $$svc..."; \
 		docker compose -f docker-compose.$$svc.yml down; \
 	done
@@ -69,7 +71,7 @@ all-down:
 # ==============================
 
 all-restart:
-	@for svc in $(SERVICES); do \
+	@for svc in $(STACK_SERVICES); do \
 		echo "Restarting $$svc..."; \
 		docker compose -f docker-compose.$$svc.yml restart; \
 	done
@@ -79,7 +81,7 @@ all-restart:
 # ==============================
 
 ps:
-	@for svc in $(SERVICES); do \
+	@for svc in $(STACK_SERVICES); do \
 		echo "===== $$svc ====="; \
 		docker compose -f docker-compose.$$svc.yml ps; \
 	done
@@ -101,6 +103,7 @@ help:
 	@echo "  make postgre-up"
 	@echo "  make airflow-up"
 	@echo "  make trino-up"
+	@echo "  make agent-up"
 	@echo ""
 	@echo "  make all-up"
 	@echo "  make all-down"

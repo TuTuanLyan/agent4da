@@ -1,5 +1,9 @@
 # Agent API
 
+Current frontend backend: `app/backend/api/main.py`, Docker service
+`agent-api`, container `agent4da`, Swagger at `http://localhost:8083/docs`.
+This document below is the legacy standalone `code/agent/main_agent.py` API.
+
 Tai lieu nay mo ta API agent moi trong `code/agent/main_agent.py`. Muc tieu la
 co Swagger de demo Text-to-SQL, context theo session, table data va chart
 suggestion de frontend/backend app map tiep.

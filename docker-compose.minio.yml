@@ -18,6 +18,25 @@ services:
     networks:
       - data_network  # Cùng network với Spark/Kafka — dùng http://minio:9000 nội bộ
 
+  minio-init:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    container_name: minio-init
+    restart: "no"
+    env_file:
+      - ./envs/minio.env
+    depends_on:
+      - minio
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      'until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" >/dev/null 2>&1; do
+        sleep 2;
+      done;
+      mc mb --ignore-existing local/bronze;
+      mc mb --ignore-existing local/silver;
+      mc mb --ignore-existing local/gold;'
+    networks:
+      - data_network
+
 networks:
   data_network:
     external: true
