@@ -3,11 +3,11 @@
 # ==============================
 
 # Docker Compose command for local testing on this machine.
-COMPOSE_CMD ?= docker-compose
+COMPOSE_CMD ?= docker compose
 
 # Danh sách service
-SERVICES := kafka spark minio postgre airflow trino agent frontend
-STACK_SERVICES := kafka minio spark airflow trino agent frontend
+SERVICES := kafka spark minio postgre airflow trino agent frontend monitoring
+STACK_SERVICES := kafka minio spark airflow trino agent frontend monitoring
 BUILD_SERVICES := airflow agent frontend
 
 # Tên file compose
@@ -19,6 +19,7 @@ COMPOSE_airflow := docker-compose.airflow.yml
 COMPOSE_trino    := docker-compose.trino.yml
 COMPOSE_agent    := docker-compose.agent.yml
 COMPOSE_frontend := docker-compose.frontend.yml
+COMPOSE_monitoring := docker-compose.monitoring.yml
 
 STACK_COMPOSE_FILES := $(foreach svc,$(STACK_SERVICES),-f $(COMPOSE_$(svc)))
 
