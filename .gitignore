@@ -4,11 +4,15 @@ dataset/
 model/
 models/
 __pycache__/
+.DS_Store
 
 jars/
 data/.spark_ivy/
 data/.spark_ivy_airflow/
 notebook/.ipynb_checkpoints/
+app/frontend/node_modules/
+app/frontend/.next/
+app/frontend/tsconfig.tsbuildinfo
 
 *.pyc
 *.pkl

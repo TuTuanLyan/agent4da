@@ -1,17 +1,15 @@
-import re
 from services.llm_service import generate_sql
-
-def clean_sql_query(generated_query: str) -> str:
-    cleaned = re.sub(r'^\s*```(?:sql)?\s*', '', generated_query, flags=re.IGNORECASE)
-    cleaned = re.sub(r'\s*```\s*$', '', cleaned)
-    cleaned = cleaned.strip().rstrip(';')
-    return cleaned.strip()
+from services.security_service import clean_sql
 
 
 def generate_sql_node(state):
-
-    sql = generate_sql(state["prompt"])
+    sql = clean_sql(generate_sql(state["prompt"]))
+    attempts = list(state.get("sql_attempts") or [])
+    attempts.append(sql)
 
     return {
-        "generated_sql": clean_sql_query(sql)
+        "generated_sql": sql,
+        "sql_attempts": attempts,
+        "requery_requested": False,
+        "error": None,
     }

@@ -1,0 +1,146 @@
+# =============================================================================
+# docker-compose.monitoring.yml  --  Agent4DA Monitoring & Observability module
+#
+# This is a SEPARATE module from the App UI. It provides Prometheus + Grafana
+# (their own standalone web UIs) plus exporters, for system administrators /
+# developers / operators only. It does NOT touch or embed into the user-facing
+# frontend.
+#
+# It attaches to the existing external Docker network "data_network" so it can
+# scrape the application services by their container names.
+#
+# ---------------------------------------------------------------------------
+# HOST PORT CHOICES (important):
+#   Prometheus container -> 9090, mapped to HOST 19090   (avoids common 9090)
+#   Grafana    container -> 3000, mapped to HOST 13000   (3000 is already used
+#                                                          by the frontend!)
+#   Exporters (node/cadvisor/postgres) are NOT published on the host; Prometheus
+#   reaches them internally over data_network. This keeps the host footprint to
+#   just two ports and avoids conflicts.
+#
+# ACCESS URLs:
+#   Prometheus : http://localhost:19090
+#   Grafana    : http://localhost:13000   (default login admin / admin)
+#
+# RUN (from repo root):
+#   docker compose -f monitoring/docker-compose.monitoring.yml up -d
+# or (from this folder):
+#   cd monitoring && docker compose -f docker-compose.monitoring.yml up -d
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Prometheus -- metrics collection / storage / alerting rules
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: agent4da-prometheus
+    restart: unless-stopped
+    user: root
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--storage.tsdb.retention.time=15d"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "19090:9090"   # HOST 19090 -> container 9090
+    networks:
+      - data_network
+
+  # ---------------------------------------------------------------------------
+  # Grafana -- standalone dashboard UI (NOT the App UI)
+  # ---------------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: agent4da-grafana
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${MON_GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${MON_GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    ports:
+      - "13000:3000"   # HOST 13000 -> container 3000
+    networks:
+      - data_network
+
+  # ---------------------------------------------------------------------------
+  # node-exporter -- host hardware metrics (CPU / memory / disk / network)
+  # ---------------------------------------------------------------------------
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: agent4da-node-exporter
+    restart: unless-stopped
+    command:
+      - "--path.rootfs=/host"
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - data_network
+    # No host port: scraped internally as node-exporter:9100
+
+  # ---------------------------------------------------------------------------
+  # cAdvisor -- per-container resource usage
+  # If cAdvisor fails to start on your host (cgroup v2 / permissions), you can
+  # comment this service out and remove the "cadvisor" scrape job; node-exporter
+  # still provides host-level resource metrics.
+  # ---------------------------------------------------------------------------
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: agent4da-cadvisor
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    networks:
+      - data_network
+    # No host port: scraped internally as cadvisor:8080
+
+  # ---------------------------------------------------------------------------
+  # postgres-exporter -- PostgreSQL availability / connections / db size
+  # Connects to the shared "postgres-db" container on data_network.
+  # The DSN password must be URL-encoded ('#' -> '%23'); default below matches
+  # envs/postgre.env (user bigdata / db agent4da). Override with env vars:
+  #   MON_POSTGRES_USER / MON_POSTGRES_PASSWORD (url-encoded) / MON_POSTGRES_DB
+  # ---------------------------------------------------------------------------
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:v0.15.0
+    container_name: agent4da-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://${MON_POSTGRES_USER:-bigdata}:${MON_POSTGRES_PASSWORD:-%233Bigdata}@${MON_POSTGRES_HOST:-postgres-db}:5432/${MON_POSTGRES_DB:-agent4da}?sslmode=disable"
+    networks:
+      - data_network
+    # No host port: scraped internally as postgres-exporter:9187
+
+# -----------------------------------------------------------------------------
+# Reuse the SAME external network the application stack already uses so that
+# Prometheus can scrape app services by container name. Created via:
+#   docker network create data_network   (the project Makefile "network" target)
+# -----------------------------------------------------------------------------
+networks:
+  data_network:
+    external: true
+    name: data_network
+
+volumes:
+  prometheus_data:
+  grafana_data:

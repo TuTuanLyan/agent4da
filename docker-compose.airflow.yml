@@ -41,6 +41,10 @@ services:
       # Airflow dùng giá trị này để build URL log: http://airflow:8793/log/...
       AIRFLOW__CORE__HOSTNAME_CALLABLE: "socket.gethostname"
 
+      # ── REST API ────────────────────────────────────────────────────────
+      # Backend dùng Basic Auth để gọi /api/v1/dags, /dagRuns, /logs.
+      AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+
       # ── Webserver ────────────────────────────────────────────────────────
       AIRFLOW__WEBSERVER__BASE_URL: "http://localhost:8081"
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"

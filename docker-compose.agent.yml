@@ -1,0 +1,35 @@
+services:
+  agent-api:
+    build:
+      context: ./app/backend
+      dockerfile: Dockerfile
+    image: agent4da/backend:0.1.0
+    container_name: agent4da
+    restart: unless-stopped
+    env_file:
+      - ./envs/app.env
+      - ./envs/postgre.env
+      - ./envs/minio.env
+      - path: ./envs/groq.env
+        required: false
+    environment:
+      APP_ENV: ${APP_ENV:-local}
+    volumes:
+      - ./code:/opt/project/code:ro
+      - ./envs:/envs:ro
+    ports:
+      - "8083:8000"
+    networks:
+      - data_network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+networks:
+  data_network:
+    external: true
+    name: data_network
+

@@ -1,0 +1,90 @@
+# =============================================================================
+# prometheus.yml  --  Agent4DA Monitoring & Observability module
+#
+# This config belongs to the SEPARATE monitoring module. It is NOT part of the
+# App UI. Prometheus scrapes the application services over the shared external
+# Docker network "data_network" using their container names.
+#
+# NOTE: Prometheus inside the container still listens on 9090. Only the HOST
+#       port is remapped (19090) in docker-compose.monitoring.yml to avoid
+#       conflicts with other services on the host.
+# =============================================================================
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    project: agent4da
+    module: monitoring
+
+# Alert rules (see alert_rules.yml). Alertmanager is optional and not shipped
+# by default; rules still evaluate and show under Prometheus -> Alerts.
+rule_files:
+  - /etc/prometheus/alert_rules.yml
+
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ["alertmanager:9093"]   # enable later if you add Alertmanager
+
+scrape_configs:
+  # --- Prometheus self-monitoring --------------------------------------------
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+        labels:
+          service: prometheus
+
+  # --- FastAPI / AI Agent backend --------------------------------------------
+  # Container name "agent4da", internal port 8000, exposes GET /metrics.
+  # This single target carries HTTP, /ask agent, ETL pipeline, Trino-from-agent
+  # and SQL-generation metrics (all registered in one process).
+  - job_name: agent-backend
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["agent4da:8000"]
+        labels:
+          service: agent-backend
+
+  # --- Host / hardware resources (CPU, memory, disk, network) ----------------
+  - job_name: node-exporter
+    static_configs:
+      - targets: ["node-exporter:9100"]
+        labels:
+          service: node-exporter
+
+  # --- Container resource usage ----------------------------------------------
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+        labels:
+          service: cadvisor
+
+  # --- PostgreSQL (availability, connections, db size) -----------------------
+  - job_name: postgres-exporter
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+        labels:
+          service: postgres
+
+  # --- Trino built-in OpenMetrics endpoint -----------------------------------
+  # Trino 481 exposes /metrics on the HTTP port. IMPORTANT: the /metrics
+  # endpoint ALWAYS requires a user identity, even on an unsecured Trino (it is
+  # protected like the Web UI / client protocol). Without it Trino returns HTTP
+  # 401 and Prometheus marks the target DOWN even though Trino is healthy.
+  #
+  # An unsecured Trino does NOT honor HTTP Basic auth, but it DOES read the
+  # user from the "X-Trino-User" header (matches the Trino docs:
+  #   curl -H X-Trino-User:foo localhost:8080/metrics ).
+  # Any username works and no password is needed. The http_headers field
+  # requires Prometheus >= 2.49 (this stack pins v2.53). If you later enable
+  # real Trino auth, switch to basic_auth with a system-info user + password.
+  - job_name: trino
+    metrics_path: /metrics
+    http_headers:
+      X-Trino-User:
+        values: ["agent4da"]
+    static_configs:
+      - targets: ["trino:8080"]
+        labels:
+          service: trino

@@ -1,0 +1,61 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens (locked from docs/WEB_APP_PLAN.md Section 6.2).
+   Light theme on :root, dark theme on [data-theme="dark"]. */
+:root {
+  --background: #F7F8FA;
+  --surface: #FFFFFF;
+  --elevated: #FFFFFF;
+  --border: #E3E7EE;
+  --text-primary: #18202A;
+  --text-secondary: #647184;
+  --accent: #2563EB;
+  --accent-2: #0F766E;
+  --success: #16A34A;
+  --warning: #D97706;
+  --error: #DC2626;
+}
+
+[data-theme="dark"] {
+  --background: #101418;
+  --surface: #171C22;
+  --elevated: #1F2630;
+  --border: #303946;
+  --text-primary: #E8EEF5;
+  --text-secondary: #A7B2C2;
+  --accent: #60A5FA;
+  --accent-2: #2DD4BF;
+  --success: #4ADE80;
+  --warning: #FBBF24;
+  --error: #F87171;
+}
+
+html,
+body {
+  background-color: var(--background);
+  color: var(--text-primary);
+  font-family: Inter, Roboto, "SF Pro Text", system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Focus ring uses accent so it stays visible in both themes. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* Tame Next.js's body. */
+body {
+  min-height: 100vh;
+}
+
+/* Light zebra rows for data tables. Components opt-in via .zebra-table. */
+.zebra-table tbody tr:nth-child(odd) {
+  background-color: color-mix(in srgb, var(--surface) 96%, var(--border) 4%);
+}
+[data-theme="dark"] .zebra-table tbody tr:nth-child(odd) {
+  background-color: color-mix(in srgb, var(--elevated) 92%, var(--border) 8%);
+}

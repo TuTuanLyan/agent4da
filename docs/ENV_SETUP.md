@@ -34,6 +34,11 @@ AIRFLOW__CORE__FERNET_KEY=change_me
 
 # External APIs
 GROQ_API_KEY=change_me
+
+# App backend auth
+APP_JWT_SECRET=change_me
+APP_BOOTSTRAP_ADMIN_EMAIL=admin@example.com
+APP_BOOTSTRAP_ADMIN_PASSWORD=change_me
 ```
 
 ## Non-secret Variables
@@ -64,6 +69,15 @@ GOLD_RUN_MODE=all
 GOLD_REFRESH_MODE=full_refresh
 GOLD_DRY_RUN=false
 GOLD_VALIDATE_TABLES=true
+
+APP_DB_URL=postgresql://bigdata:change_me@postgres-db:5432/agent4da
+APP_CORS_ORIGINS=http://localhost:3000
+APP_TRINO_HOST=trino
+APP_TRINO_PORT=8080
+APP_AIRFLOW_BASE_URL=http://airflow:8080
+APP_SPARK_MASTER_URL=http://spark-master:8080
+APP_MINIO_ENDPOINT=http://minio:9000
+APP_AGENT_ENGINE=v2
 ```
 
 ## Files
@@ -74,3 +88,4 @@ GOLD_VALIDATE_TABLES=true
 - `envs/iceberg.env`: Iceberg catalog/JDBC vars and Gold run options.
 - `envs/spark.env`: Spark submit defaults.
 - `envs/groq.env`: optional LLM/API key for agent experiments.
+- `envs/app.env`: FastAPI backend auth, database URL, CORS, and service URLs.

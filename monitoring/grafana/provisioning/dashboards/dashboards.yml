@@ -1,0 +1,16 @@
+# Grafana dashboard provisioning -- Agent4DA Monitoring module.
+# Loads every dashboard JSON mounted at /var/lib/grafana/dashboards.
+apiVersion: 1
+
+providers:
+  - name: agent4da-dashboards
+    orgId: 1
+    folder: Agent4DA
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

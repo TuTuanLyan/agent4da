@@ -1,36 +1,22 @@
-import re
-
-
-FORBIDDEN_KEYWORDS = [
-    "INSERT",
-    "UPDATE",
-    "DELETE",
-    "DROP",
-    "ALTER",
-    "TRUNCATE",
-    "CREATE",
-]
+from services.security_service import add_default_limit, validate_readonly_sql
 
 
 def guard_sql_node(state):
-    sql = (state.get("generated_sql") or "").strip()
-    normalized = re.sub(r"\s+", " ", sql).strip()
-    upper_sql = normalized.upper()
+    validation = validate_readonly_sql(state.get("generated_sql") or "")
 
-    if not upper_sql.startswith("SELECT"):
+    if not validation["allowed"]:
         return {
-            "error": "Only SELECT SQL is allowed.",
+            "generated_sql": "",
+            "sql_validation": validation,
+            "error": validation["reason"],
         }
 
-    if re.search(r";\s*\S", sql):
-        return {
-            "error": "Only one SQL statement is allowed.",
-        }
+    limited_sql = add_default_limit(validation["sql"])
+    validation = dict(validation)
+    validation["sql"] = limited_sql
 
-    for keyword in FORBIDDEN_KEYWORDS:
-        if re.search(rf"\b{keyword}\b", upper_sql):
-            return {
-                "error": f"Forbidden SQL keyword: {keyword}",
-            }
-
-    return {}
+    return {
+        "generated_sql": limited_sql,
+        "sql_validation": validation,
+        "error": None,
+    }

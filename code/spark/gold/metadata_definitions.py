@@ -31,10 +31,10 @@ TABLE_DEFINITIONS = [
     {
         "table": DAILY_PRODUCT_SUMMARY,
         "display_name": "Daily product summary",
-        "purpose": "Daily product-level performance with product, brand, category, behavior, price, revenue, and conversion metrics.",
+        "purpose": "Daily product-level performance by date, brand, product, category, views, carts, purchases, revenue, price, and conversion metrics.",
         "grain": "1 row = 1 event_date + 1 product_id.",
-        "use_for": "Use for questions by product, brand, or category when product-level daily metrics are needed.",
-        "query_notes": "Has event_date; for simple month/year filters, filter event_date directly and do not join dim_time. Good default for product, brand, and category performance questions.",
+        "use_for": "Use for daily questions by product, brand, category, views, carts, purchases, revenue, and conversion when product-level metrics are needed.",
+        "query_notes": "Has event_date; for year/month/day filters, filter event_date directly and do not join dim_time. When asking top brand/nhãn hàng/thương hiệu/hãng, the final result must have one row per brand. Do not GROUP BY brand with category/product then LIMIT for brand ranking because that ranks brand-category combinations and duplicates brands. If asking top brand plus related category/product, first aggregate total metric by brand, then aggregate metric by brand + category/product and use ROW_NUMBER() OVER (PARTITION BY brand ORDER BY metric DESC) to pick the top related category/product per brand. brand = 'unknown' means missing/unknown brand, not a real brand; display as 'Không rõ' or exclude it for real/notable brand questions unless the user asks to include unknown.",
         "is_agent_visible": True,
     },
     {
@@ -340,9 +340,9 @@ COMMON_COLUMN_DEFINITIONS = {
         "example_usage": "WHERE event_type = 'purchase'",
     },
     "product_id": {
-        "meaning": "Product identifier.",
+        "meaning": "Mã sản phẩm.",
         "business_terms": "sản phẩm, san pham, mã sản phẩm, ma san pham, product, product id",
-        "example_usage": "GROUP BY product_id",
+        "example_usage": "Khi hỏi sản phẩm được xem/mua/thêm giỏ nhiều nhất, group by product_id. Nếu hỏi top product tương ứng trong từng brand, dùng ROW_NUMBER() PARTITION BY brand.",
     },
     "category_id": {
         "meaning": "Source category identifier.",
@@ -355,24 +355,24 @@ COMMON_COLUMN_DEFINITIONS = {
         "example_usage": "GROUP BY category_code",
     },
     "category_l1": {
-        "meaning": "Top-level product category.",
+        "meaning": "Các cấp danh mục sản phẩm; category_l1 là danh mục cấp cao nhất.",
         "business_terms": "danh mục, danh muc, ngành hàng, nganh hang, category, category l1",
-        "example_usage": "GROUP BY category_l1",
+        "example_usage": "Khi hỏi danh mục được xem/mua/doanh thu cao nhất, group by category. Nếu hỏi category tương ứng của từng brand, chọn category đứng đầu trong từng brand bằng ROW_NUMBER().",
     },
     "category_l2": {
-        "meaning": "Second-level product category.",
+        "meaning": "Các cấp danh mục sản phẩm; category_l2 là danh mục cấp 2.",
         "business_terms": "danh mục cấp 2, danh muc cap 2, ngành hàng cấp 2, category l2",
-        "example_usage": "GROUP BY category_l2",
+        "example_usage": "Khi hỏi danh mục được xem/mua/doanh thu cao nhất, group by category. Nếu hỏi category tương ứng của từng brand, chọn category đứng đầu trong từng brand bằng ROW_NUMBER().",
     },
     "category_l3": {
-        "meaning": "Third-level product category.",
+        "meaning": "Các cấp danh mục sản phẩm; category_l3 là danh mục cấp 3.",
         "business_terms": "danh mục cấp 3, danh muc cap 3, ngành hàng cấp 3, category l3",
-        "example_usage": "GROUP BY category_l3",
+        "example_usage": "Khi hỏi danh mục được xem/mua/doanh thu cao nhất, group by category. Nếu hỏi category tương ứng của từng brand, chọn category đứng đầu trong từng brand bằng ROW_NUMBER().",
     },
     "brand": {
-        "meaning": "Product brand.",
+        "meaning": "Tên nhãn hàng/thương hiệu/hãng của sản phẩm. Giá trị 'unknown' biểu thị nhãn hàng không rõ hoặc dữ liệu brand bị thiếu, không phải một nhãn hàng thật.",
         "business_terms": "brand, nhãn hàng, nhan hang, thương hiệu, thuong hieu, hãng, hang",
-        "example_usage": "GROUP BY brand",
+        "example_usage": "Dùng trong GROUP BY khi hỏi theo nhãn hàng. Khi hiển thị, map 'unknown' thành 'Không rõ'. Nếu câu hỏi yêu cầu top nhãn hàng thật/nổi bật, có thể filter brand <> 'unknown'.",
     },
     "user_id": {
         "meaning": "User identifier.",
@@ -420,9 +420,9 @@ COMMON_COLUMN_DEFINITIONS = {
         "example_usage": "SUM(session_revenue) AS total_session_revenue",
     },
     "view_count": {
-        "meaning": "Number of view events at the table grain.",
-        "business_terms": "lượt xem, luot xem, xem, viewed, views",
-        "example_usage": "SUM(view_count) AS views",
+        "meaning": "Số lượt xem sản phẩm trong grain của bảng.",
+        "business_terms": "lượt xem, luot xem, xem, xem nhiều, viewed, views, view count",
+        "example_usage": "Dùng SUM(view_count) khi hỏi tổng lượt xem hoặc xếp hạng theo lượt xem.",
     },
     "total_views": {
         "meaning": "Total number of view events at the table grain.",

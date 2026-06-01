@@ -1,0 +1,16 @@
+# Grafana datasource provisioning -- Agent4DA Monitoring module.
+# Points Grafana at the in-network Prometheus container (port 9090 internal).
+# The fixed uid "prometheus" is referenced by all provisioned dashboards.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: true
+    jsonData:
+      timeInterval: 15s
+      httpMethod: POST

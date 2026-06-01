@@ -1,5 +1,15 @@
 import os
 
+try:  # observability is optional and must never break query execution
+    from services.obs_metrics import observe_trino_query
+except Exception:  # pragma: no cover
+    from contextlib import contextmanager
+
+    @contextmanager
+    def observe_trino_query():
+        yield
+
+
 _CONNECTIONS = {}
 
 
@@ -12,7 +22,9 @@ def connect_to_trino(host, port, user, catalog, schema):
             port=port,
             user=user,
             catalog=catalog,
-            schema=schema
+            schema=schema,
+            max_attempts=int(os.getenv("TRINO_MAX_ATTEMPTS", "1")),
+            request_timeout=float(os.getenv("TRINO_REQUEST_TIMEOUT_SECONDS", "5")),
         )
         print("[Trino] Connection to Trino established successfully.")
         return connection
@@ -28,15 +40,17 @@ def get_trino_connection(catalog="iceberg", schema="metadata"):
     key = (host, port, user, catalog, schema)
 
     if key not in _CONNECTIONS:
-        _CONNECTIONS[key] = connect_to_trino(
+        connection = connect_to_trino(
             host=host,
             port=port,
             user=user,
             catalog=catalog,
             schema=schema,
         )
+        if connection is not None:
+            _CONNECTIONS[key] = connection
 
-    return _CONNECTIONS[key]
+    return _CONNECTIONS.get(key)
 
 
 def execute_query(connection, query):
@@ -47,8 +61,9 @@ def execute_query(connection, query):
     cursor = None
     try:
         cursor = connection.cursor()
-        cursor.execute(query)
-        results = cursor.fetchall()
+        with observe_trino_query():
+            cursor.execute(query)
+            results = cursor.fetchall()
         return results
     except Exception as e:
         print(f"[Trino] Failed to execute query: {e}")
@@ -58,6 +73,8 @@ def execute_query(connection, query):
             cursor.close()
     
 def row_to_dict(cursor, row):
+    if cursor.description is None:
+        return {}
     names = [desc[0] for desc in cursor.description]
     return dict(zip(names, row))
 
@@ -72,8 +89,10 @@ def execute_query_to_dicts(connection, query, raise_on_error=False):
     cursor = None
     try:
         cursor = connection.cursor()
-        cursor.execute(query)
-        return [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        with observe_trino_query():
+            cursor.execute(query)
+            rows = [row_to_dict(cursor, row) for row in cursor.fetchall()]
+        return rows
     except Exception as e:
         print(f"[Trino] Failed to execute query: {e}")
         if raise_on_error:
