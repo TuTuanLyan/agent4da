@@ -45,7 +45,6 @@ GOLD_JARS = [
 ]
 LOCAL_JARS = BASE_JARS + GOLD_JARS
 CLASSPATH = ":".join(LOCAL_JARS)
-JARS_CSV = ",".join(LOCAL_JARS)
 
 
 default_args = {
@@ -144,10 +143,13 @@ def gold_metadata_pipeline():
             "--refresh-mode",
             REFRESH_MODE,
         ],
-        jars=JARS_CSV,
+        # Use mounted jars through classpath only. Passing --jars makes Spark
+        # copy them into each application work dir on every run.
+        jars=None,
         driver_class_path=CLASSPATH,
         conf=metadata_spark_conf(METADATA_WAREHOUSE),
         env_vars=metadata_env_vars(METADATA_WAREHOUSE),
+        packages=None,
         name="BuildGoldAgentMetadata",
         verbose=True,
         execution_timeout=timedelta(minutes=15),
@@ -165,10 +167,11 @@ def gold_metadata_pipeline():
             "--gold-namespace",
             GOLD_NAMESPACE,
         ],
-        jars=JARS_CSV,
+        jars=None,
         driver_class_path=CLASSPATH,
         conf=metadata_spark_conf(METADATA_WAREHOUSE),
         env_vars=metadata_env_vars(METADATA_WAREHOUSE),
+        packages=None,
         name="ValidateGoldAgentMetadata",
         verbose=True,
         execution_timeout=timedelta(minutes=15),

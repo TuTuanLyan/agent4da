@@ -3,11 +3,8 @@
 
 FROM node:20-alpine AS deps
 WORKDIR /app
-COPY package.json ./
-# We install with `npm install` (not `npm ci`) because Phase 1 ships without a
-# lockfile to keep the diff small. Phase 1 validation includes a `npm install`
-# step that will generate package-lock.json on first build.
-RUN npm install --no-audit --no-fund
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
 FROM node:20-alpine AS builder
 WORKDIR /app

@@ -1,0 +1,21 @@
+services:
+  frontend:
+    build:
+      context: ./app/frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8083}
+    image: agent4da/frontend:0.1.0
+    container_name: agent4da-ui
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8083}
+    ports:
+      - "3000:3000"
+    networks:
+      - data_network
+
+networks:
+  data_network:
+    external: true
+    name: data_network

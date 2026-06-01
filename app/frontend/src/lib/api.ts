@@ -52,6 +52,33 @@ interface RefreshResponse {
 let refreshInFlight: Promise<RefreshResponse | null> | null = null;
 const REQUEST_TIMEOUT_MS = 12_000;
 
+function formatErrorDetail(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (typeof detail === "number" || typeof detail === "boolean") return String(detail);
+  if (detail == null) return "";
+
+  if (Array.isArray(detail)) {
+    return detail
+      .map((item) => formatErrorDetail(item))
+      .filter(Boolean)
+      .join("; ");
+  }
+
+  if (typeof detail === "object") {
+    const record = detail as Record<string, unknown>;
+    const message = record.detail ?? record.message ?? record.msg;
+    if (message !== undefined) return formatErrorDetail(message);
+
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return "";
+    }
+  }
+
+  return "";
+}
+
 async function fetchWithTimeout(
   input: RequestInfo | URL,
   init: RequestInit = {},
@@ -138,10 +165,11 @@ export async function apiFetch<T = unknown>(
 
   if (!response.ok) {
     const detail =
-      (body && typeof body === "object" && "detail" in (body as object)
-        ? String((body as ApiErrorBody).detail ?? "")
-        : "") || `Request failed with status ${response.status}`;
-    throw new ApiError(response.status, detail, isJson ? (body as ApiErrorBody) : null);
+      body && typeof body === "object" && "detail" in (body as object)
+        ? formatErrorDetail((body as ApiErrorBody).detail)
+        : formatErrorDetail(body);
+    const message = detail || `Request failed with status ${response.status}`;
+    throw new ApiError(response.status, message, isJson ? (body as ApiErrorBody) : null);
   }
 
   return body as T;

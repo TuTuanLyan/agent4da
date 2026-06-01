@@ -5,6 +5,7 @@ set -euo pipefail
 
 PROJECT_DB="${POSTGRES_DB:-agent4da}"
 PROJECT_DB_USER="${POSTGRES_USER:-bigdata}"
+PROJECT_DB_PASSWORD="${POSTGRES_PASSWORD:?Missing POSTGRES_PASSWORD}"
 AIRFLOW_DB_USER="${AIRFLOW_DB_USER:-airflow_user}"
 AIRFLOW_DB_PASSWORD="${AIRFLOW_DB_PASSWORD:?Missing AIRFLOW_DB_PASSWORD}"
 
@@ -13,8 +14,12 @@ psql -v ON_ERROR_STOP=1 \
   --dbname "${PROJECT_DB}" \
   -v db_name="${PROJECT_DB}" \
   -v project_user="${PROJECT_DB_USER}" \
+  -v project_password="${PROJECT_DB_PASSWORD}" \
   -v airflow_user="${AIRFLOW_DB_USER}" \
   -v airflow_password="${AIRFLOW_DB_PASSWORD}" <<'SQL'
+SELECT format('ALTER ROLE %I WITH PASSWORD %L', :'project_user', :'project_password')
+\gexec
+
 SELECT format('CREATE ROLE %I WITH LOGIN PASSWORD %L', :'airflow_user', :'airflow_password')
 WHERE NOT EXISTS (
     SELECT FROM pg_catalog.pg_roles WHERE rolname = :'airflow_user'

@@ -41,6 +41,7 @@ def build_classpath():
 
 def base_spark_conf(classpath):
     return {
+        "spark.driver.extraClassPath": classpath,
         "spark.executor.extraClassPath": classpath,
         "spark.pyspark.python": EXECUTOR_PYTHON,
         "spark.pyspark.driver.python": DRIVER_PYTHON,

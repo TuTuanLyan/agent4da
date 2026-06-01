@@ -18,15 +18,15 @@ CSV/sample data
 ```
 
 README nay ghi lai tinh trang repo hien tai, doc tu source code va docs tai
-ngay 2026-05-30. Muc dich la lam tai lieu tong quan de tiep tuc hoi/len ke
+ngay 2026-06-01. Muc dich la lam tai lieu tong quan de tiep tuc hoi/len ke
 hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
 
 ## 1. Tinh trang hien tai
 
 ### Da co
 
-- Docker Compose stack cho Kafka, Spark standalone, MinIO, PostgreSQL, Airflow
-  va Trino.
+- Docker Compose stack cho Kafka, Spark standalone, MinIO, PostgreSQL, Airflow,
+  Trino, Agent backend va Frontend UI.
 - Spark standalone dang tach `spark-master` va `spark-worker` thanh cac
   container rieng.
 - Bronze batch job doc Kafka theo offset da luu tren MinIO, parse JSON va ghi
@@ -50,6 +50,8 @@ hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
   chart va sinh insight.
 - Agent co fallback metadata tinh tu `code/spark/gold/metadata_definitions.py`
   neu chua doc duoc metadata tables tu Trino.
+- Frontend Next.js da duoc dong goi bang `app/frontend/Dockerfile` va
+  `docker-compose.frontend.yml`, expose local port `3000`.
 
 ### Chua hoan thien hoac can kiem tra ky
 
@@ -74,6 +76,8 @@ hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
   implement.
 - `Makefile all-up` dung `docker-compose.airflow.yml` lam PostgreSQL shared
   stack, nen khong start `docker-compose.postgre.yml` rieng trong luong all-up.
+  `make all-up` va `make all-down` chay chung toan bo compose file cua stack
+  de UI/backend/data services duoc up/down cung mot project Docker Compose.
 - `envs/`, `jars/`, `data/`, `log/` dang bi gitignore. Khi deploy sang may
   khac phai copy/generate lai cac file nay.
 - Kafka compose dang advertise listener ngoai la `localhost:9092`; dung tot khi
@@ -110,6 +114,12 @@ hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
                                                         +------------------+
                                                         | FastAPI Agent    |
                                                         | LangGraph SQL    |
+                                                        +--------+---------+
+                                                                 |
+                                                                 v
+                                                        +------------------+
+                                                        | Next.js UI       |
+                                                        | localhost:3000   |
                                                         +------------------+
 ```
 
@@ -122,6 +132,8 @@ hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
   metadata definitions va Spark task entrypoints.
 - `code/airflow/dags/`: DAGs cho Bronze, Silver, Gold va Gold metadata.
 - `code/agent/`: FastAPI + LangGraph Agent Text-to-SQL.
+- `app/backend/`: FastAPI backend phuc vu UI va goi engine trong `code/agent`.
+- `app/frontend/`: Next.js Analytics Console, dong goi Docker port `3000`.
 - `trino/`: Trino config va entrypoint generate catalog properties tu env.
 - `dockerfile/`: Dockerfile Airflow va entrypoint.
 - `script/`: helper script submit Spark job va thao tac Kafka.
@@ -144,6 +156,7 @@ hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
 | Airflow | `docker-compose.airflow.yml` | `8081`, `8793` | LocalExecutor, SparkSubmitOperator |
 | Trino | `docker-compose.trino.yml` | `8082` | Query Iceberg/Postgres |
 | Agent backend | `docker-compose.agent.yml` | `8083` | FastAPI backend container `agent4da`, phuc vu frontend |
+| Frontend UI | `docker-compose.frontend.yml` | `3000` | Next.js production UI container `agent4da-ui` |
 
 Tat ca compose file dang dung external Docker network:
 
@@ -389,7 +402,8 @@ app/backend/api/main.py
 Chay bang Docker:
 
 ```bash
-docker compose -f docker-compose.agent.yml up -d --build
+make agent-build
+make agent-up
 ```
 
 Swagger UI:
@@ -449,23 +463,103 @@ envs/postgre.env
 envs/iceberg.env
 ```
 
+### 7.1 Frontend UI
+
+Entry point:
+
+```text
+app/frontend/src/app
+```
+
+Chay UI bang Docker:
+
+```bash
+make frontend-build
+make frontend-up
+```
+
+Hoac chay chung toan bo stack data + backend + UI:
+
+```bash
+make all-up
+```
+
+UI local:
+
+```text
+http://localhost:3000
+```
+
+Compose frontend build image tu `app/frontend/Dockerfile` va mac dinh gan
+`NEXT_PUBLIC_API_BASE_URL=http://localhost:8083`, nen browser se goi backend
+qua port host `8083`. Neu deploy tren VM/domain khac, build lai UI voi:
+
+```bash
+NEXT_PUBLIC_API_BASE_URL=http://<host-or-domain>:8083 make frontend-build
+make frontend-up
+```
+
+Khi doi origin cua UI, cap nhat `APP_CORS_ORIGINS` trong `envs/app.env` cho
+backend va restart `agent-api`.
+
 ## 8. Cach chay local tham khao
 
-Tao network:
+Tao network neu chay thu cong. Khi dung Makefile, target `*-up` va `all-up`
+se tu tao network neu chua co:
 
 ```bash
 docker network create data_network
 ```
 
-Start cac service nen theo thu tu:
+Makefile mac dinh dung Docker Compose plugin `docker compose`.
+
+Build cac image local lan dau hoac khi Dockerfile/code image thay doi:
 
 ```bash
-docker compose -f docker-compose.kafka.yml up -d
-docker compose -f docker-compose.minio.yml up -d
-docker compose -f docker-compose.spark.yml up -d
-docker compose -f docker-compose.airflow.yml up -d
-docker compose -f docker-compose.trino.yml up -d
-docker compose -f docker-compose.agent.yml up -d --build
+make all-build
+```
+
+Hoac build rieng tung image can build:
+
+```bash
+make airflow-build
+make agent-build
+make frontend-build
+```
+
+Start toan bo stack bang Makefile:
+
+```bash
+make all-up
+```
+
+`make *-up` va `make all-up` chi start container voi `--no-build`; build duoc
+tach rieng qua cac target `*-build`.
+
+Dung:
+
+```bash
+make all-down
+```
+
+`all-up/all-down` dung chung day du cac compose file cua Kafka, MinIO, Spark,
+Airflow, Trino, backend va frontend. Cach nay giup `down` go dung cung Docker
+Compose project, tranh tinh trang UI/backend hoac data service con chay le.
+
+Start cac service thu cong theo thu tu neu can debug rieng:
+
+```bash
+docker compose -f docker-compose.airflow.yml build
+docker compose -f docker-compose.agent.yml build
+docker compose -f docker-compose.frontend.yml build
+
+docker compose -f docker-compose.kafka.yml up -d --no-build
+docker compose -f docker-compose.minio.yml up -d --no-build
+docker compose -f docker-compose.spark.yml up -d --no-build
+docker compose -f docker-compose.airflow.yml up -d --no-build
+docker compose -f docker-compose.trino.yml up -d --no-build
+docker compose -f docker-compose.agent.yml up -d --no-build
+docker compose -f docker-compose.frontend.yml up -d --no-build
 ```
 
 Khong can chay `docker-compose.postgre.yml` rieng neu da chay
@@ -567,10 +661,12 @@ May VM nen can nhac cho demo:
    SPARK_WORKER_MEMORY=2g
    ```
 
-2. Build service Agent backend.
+2. Build service Agent backend va Frontend UI.
 
    Repo da co `docker-compose.agent.yml` va `app/backend/Dockerfile`. Service
    la `agent-api`, container name la `agent4da`, expose port `8083`.
+   Frontend dung `docker-compose.frontend.yml` va `app/frontend/Dockerfile`,
+   container name `agent4da-ui`, expose port `3000`.
 
 3. Dieu chinh env cho cloud.
 
@@ -585,7 +681,10 @@ May VM nen can nhac cho demo:
 
    Khuyen nghi an toan cho demo:
 
-   - Public chi mo `8083` cho Agent backend neu can nguoi khac truy cap.
+   - Public mo `3000` cho Frontend UI khi can demo truc tiep.
+   - Backend `8083` phai reachable tu browser theo
+     `NEXT_PUBLIC_API_BASE_URL`; neu khong public `8083`, can reverse proxy UI
+     va API qua cung domain.
    - Cac UI quan tri nhu Airflow `8081`, Spark `8080`, MinIO `9001`, Trino
      `8082` nen dung SSH tunnel hoac firewall source IP rieng.
 
@@ -617,17 +716,30 @@ May VM nen can nhac cho demo:
    docker network create data_network
    ```
 
-9. Start stack theo thu tu:
+9. Start stack bang Makefile:
 
    ```bash
-   docker compose -f docker-compose.kafka.yml up -d
-   docker compose -f docker-compose.minio.yml up -d
-   docker compose -f docker-compose.spark.yml up -d
-   docker compose -f docker-compose.airflow.yml up -d
-   docker compose -f docker-compose.trino.yml up -d
+   make all-up
    ```
 
-10. Start Agent backend bang `docker-compose.agent.yml`.
+   Hoac start thu cong theo thu tu:
+
+   ```bash
+   docker compose -f docker-compose.airflow.yml build
+   docker compose -f docker-compose.agent.yml build
+   docker compose -f docker-compose.frontend.yml build
+
+   docker compose -f docker-compose.kafka.yml up -d --no-build
+   docker compose -f docker-compose.minio.yml up -d --no-build
+   docker compose -f docker-compose.spark.yml up -d --no-build
+   docker compose -f docker-compose.airflow.yml up -d --no-build
+   docker compose -f docker-compose.trino.yml up -d --no-build
+   docker compose -f docker-compose.agent.yml up -d --no-build
+   docker compose -f docker-compose.frontend.yml up -d --no-build
+   ```
+
+10. Kiem tra UI tai `http://<vm-ip>:3000` va backend docs tai
+    `http://<vm-ip>:8083/docs`.
 11. Gui data vao Kafka bang producer.
 12. Chay Bronze/Silver hoac bat DAG Airflow.
 13. Trigger `gold_pipeline`.
@@ -641,7 +753,8 @@ Mo toi thieu:
 
 ```text
 tcp:22    SSH
-tcp:8083  Agent backend neu can public
+tcp:3000  Frontend UI neu can public demo
+tcp:8083  Agent backend neu browser can goi truc tiep
 ```
 
 Chi mo khi can demo/debug, va nen restrict source IP:
@@ -717,6 +830,7 @@ $300.
   fallback tu static definitions trong `code/spark/gold/metadata_definitions.py`.
 - Backend `/agent/ask` va `/agent/stream` sinh SQL read-only, query Trino va
   tra ve rows/insight cho frontend.
+- Frontend `http://localhost:3000` load duoc UI va goi backend `8083` thanh cong.
 
 ## 12. Tai lieu lien quan
 

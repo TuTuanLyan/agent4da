@@ -42,7 +42,6 @@ GOLD_JARS = [
 ]
 LOCAL_JARS = BASE_JARS + GOLD_JARS
 CLASSPATH = ":".join(LOCAL_JARS)
-JARS_CSV = ",".join(LOCAL_JARS)
 
 STAGING_NAMESPACE = "gold_staging"
 STAGING_TABLE = "stg_events"
@@ -187,10 +186,13 @@ def summary_task(task_id, summary, name):
         conn_id="spark_default",
         application="/opt/project/code/spark/gold/tasks/gold_build_summaries.py",
         application_args=summary_application_args(summary),
-        jars=JARS_CSV,
+        # Use mounted jars through classpath only. Passing --jars makes Spark
+        # copy them into each application work dir on every run.
+        jars=None,
         driver_class_path=CLASSPATH,
         conf=gold_spark_conf(GOLD_WAREHOUSE),
         env_vars=gold_env_vars(GOLD_WAREHOUSE),
+        packages=None,
         name=name,
         verbose=True,
         execution_timeout=timedelta(minutes=20),
@@ -226,10 +228,11 @@ def gold_pipeline():
             "--refresh-mode",
             REFRESH_MODE,
         ],
-        jars=JARS_CSV,
+        jars=None,
         driver_class_path=CLASSPATH,
         conf=gold_spark_conf(GOLD_STAGING_WAREHOUSE),
         env_vars=gold_env_vars(GOLD_STAGING_WAREHOUSE),
+        packages=None,
         name="GoldPrepareEvents",
         verbose=True,
         execution_timeout=timedelta(minutes=20),
@@ -259,10 +262,11 @@ def gold_pipeline():
             "--refresh-mode",
             REFRESH_MODE,
         ],
-        jars=JARS_CSV,
+        jars=None,
         driver_class_path=CLASSPATH,
         conf=gold_spark_conf(GOLD_WAREHOUSE),
         env_vars=gold_env_vars(GOLD_WAREHOUSE),
+        packages=None,
         name="GoldBuildFacts",
         verbose=True,
         execution_timeout=timedelta(minutes=20),
@@ -306,10 +310,11 @@ def gold_pipeline():
             "--refresh-mode",
             REFRESH_MODE,
         ],
-        jars=JARS_CSV,
+        jars=None,
         driver_class_path=CLASSPATH,
         conf=gold_spark_conf(GOLD_WAREHOUSE),
         env_vars=gold_env_vars(GOLD_WAREHOUSE),
+        packages=None,
         name="GoldBuildDimensions",
         verbose=True,
         execution_timeout=timedelta(minutes=20),
