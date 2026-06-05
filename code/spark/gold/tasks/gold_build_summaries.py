@@ -9,6 +9,9 @@ SPARK_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if SPARK_DIR not in sys.path:
     sys.path.insert(0, SPARK_DIR)
 
+from pyspark.sql.functions import col
+
+from common.partition_state import active_gold_dates, mark_gold_pending_with_error
 from gold import summaries
 from gold.config import (
     DAILY_BRAND_SUMMARY,
@@ -18,21 +21,24 @@ from gold.config import (
     DEFAULT_ALLOWED_LOCATION_PREFIXES,
     DEFAULT_CATALOG,
     DEFAULT_GOLD_BASE_PATH,
+    DEFAULT_GOLD_REFRESH_MODE,
     DEFAULT_GOLD_NAMESPACE,
     DEFAULT_GOLD_WAREHOUSE,
-    DEFAULT_REFRESH_MODE,
+    DEFAULT_PARTITION_STATE_PATH,
     DIM_PRODUCT,
     FACT_EVENTS,
     FACT_SALES,
+    REFRESH_MODE_FULL,
+    REFRESH_MODE_INCREMENTAL,
     create_spark_session,
     load_runtime_config,
-    require_full_refresh,
+    normalize_refresh_mode,
     table_location,
 )
 from gold.ddl import create_iceberg_table_if_not_exists, create_namespace_if_not_exists
 from gold.identifiers import assert_safe_table_location, table_identifier
 from gold.readers import read_required_table
-from gold.writers import write_full_refresh
+from gold.writers import date_in_condition, write_full_refresh, write_replace_where
 
 
 JOB_NAME = "GoldBuildSummaries"
@@ -74,12 +80,13 @@ def parse_args(argv=None):
         default=table_location(DEFAULT_GOLD_BASE_PATH, DAILY_BRAND_SUMMARY),
     )
     parser.add_argument("--summary", choices=SUMMARY_CHOICES, default="all")
-    parser.add_argument("--refresh-mode", default=DEFAULT_REFRESH_MODE)
+    parser.add_argument("--refresh-mode", default=DEFAULT_GOLD_REFRESH_MODE)
+    parser.add_argument("--state-path", default=DEFAULT_PARTITION_STATE_PATH)
     return parser.parse_args(argv)
 
 
 def validate_args(args):
-    args.refresh_mode = require_full_refresh(args.refresh_mode, "gold_build_summaries")
+    args.refresh_mode = normalize_refresh_mode(args.refresh_mode, "gold_build_summaries")
     table_identifier(args.catalog_name, args.source_namespace, args.fact_events_table)
     table_identifier(args.catalog_name, args.source_namespace, args.fact_sales_table)
     table_identifier(args.catalog_name, args.source_namespace, args.dim_product_table)
@@ -152,6 +159,10 @@ def validate_summary(kind, validator, output_df, fact_events_df, fact_sales_df, 
         validator(output_df, full_name)
 
 
+def _filter_dates(df, column_name, partition_dates):
+    return df.where(col(column_name).cast("string").isin(partition_dates))
+
+
 def run_task(spark, args):
     fact_events_full_name = table_identifier(
         args.catalog_name,
@@ -174,19 +185,62 @@ def run_task(spark, args):
     log(f"fact_sales table    : {fact_sales_full_name}")
     log(f"dim_product table   : {dim_product_full_name}")
     log(f"summary selection   : {args.summary}")
+    log(f"Refresh mode        : {args.refresh_mode}")
+    log(f"State path          : {args.state_path}")
 
-    fact_events_df = read_required_table(spark, fact_events_full_name).cache()
-    fact_sales_df = read_required_table(spark, fact_sales_full_name).cache()
-    dim_product_df = read_required_table(spark, dim_product_full_name).cache()
+    create_namespace_if_not_exists(spark, args.catalog_name, args.target_namespace)
+
+    for _kind, spec in specs.items():
+        full_name = table_identifier(
+            args.catalog_name,
+            args.target_namespace,
+            spec["table"],
+        )
+        create_iceberg_table_if_not_exists(
+            spark,
+            full_name,
+            spec["schema_sql"],
+            spec["path"],
+            partition_clause="event_date",
+        )
+
+    if args.refresh_mode == REFRESH_MODE_INCREMENTAL:
+        partition_dates = active_gold_dates(spark, args.state_path)
+        log(f"Active Gold dates    : {partition_dates}")
+        if not partition_dates:
+            log("No active Gold dates. Summary build is a no-op.")
+            return
+    else:
+        partition_dates = []
+
+    fact_events_df = None
+    fact_sales_df = None
+    dim_product_df = None
     output_df = None
 
     try:
+        fact_events_df = read_required_table(spark, fact_events_full_name)
+        fact_sales_df = read_required_table(spark, fact_sales_full_name)
+        dim_product_df = read_required_table(spark, dim_product_full_name).cache()
+
+        if args.refresh_mode == REFRESH_MODE_INCREMENTAL:
+            fact_events_df = _filter_dates(
+                fact_events_df,
+                "event_date",
+                partition_dates,
+            )
+            fact_sales_df = _filter_dates(
+                fact_sales_df,
+                "sale_date",
+                partition_dates,
+            )
+
+        fact_events_df = fact_events_df.cache()
+        fact_sales_df = fact_sales_df.cache()
         summaries.validate_inputs(fact_events_df, fact_sales_df, dim_product_df)
         log(f"fact_events rows    : {fact_events_df.count()}")
         log(f"fact_sales rows     : {fact_sales_df.count()}")
         log(f"dim_product rows    : {dim_product_df.count()}")
-
-        create_namespace_if_not_exists(spark, args.catalog_name, args.target_namespace)
 
         for kind, spec in specs.items():
             full_name = table_identifier(
@@ -215,29 +269,37 @@ def run_task(spark, args):
                 fact_sales_df,
                 full_name,
             )
-            create_iceberg_table_if_not_exists(
-                spark,
-                full_name,
-                spec["schema_sql"],
-                spec["path"],
-                partition_clause="event_date",
-            )
-            write_full_refresh(
-                output_df,
-                full_name,
-                spec["columns"],
-                mode=args.refresh_mode,
-            )
+            if args.refresh_mode == REFRESH_MODE_FULL:
+                write_full_refresh(
+                    output_df,
+                    full_name,
+                    spec["columns"],
+                    mode=args.refresh_mode,
+                )
+            else:
+                write_replace_where(
+                    output_df,
+                    full_name,
+                    date_in_condition("event_date", partition_dates),
+                    spec["columns"],
+                )
             output_df.unpersist()
             output_df = None
 
-        log("Completed summary table full refresh.")
+        if args.refresh_mode == REFRESH_MODE_FULL:
+            log("Completed summary table full refresh.")
+        else:
+            log("Completed summary table incremental replace.")
+    except Exception as exc:
+        if args.refresh_mode == REFRESH_MODE_INCREMENTAL:
+            mark_gold_pending_with_error(spark, args.state_path, partition_dates, exc)
+        raise
     finally:
         if output_df is not None:
             output_df.unpersist()
-        dim_product_df.unpersist()
-        fact_sales_df.unpersist()
-        fact_events_df.unpersist()
+        for cached_df in [dim_product_df, fact_sales_df, fact_events_df]:
+            if cached_df is not None:
+                cached_df.unpersist()
 
 
 def main(argv=None):

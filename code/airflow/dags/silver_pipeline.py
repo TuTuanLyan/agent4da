@@ -47,6 +47,12 @@ def silver_pipeline():
             "spark.executorEnv.MINIO_BUCKET_BRONZE": env("MINIO_BUCKET_BRONZE", "bronze"),
             "spark.executorEnv.MINIO_BUCKET_SILVER": env("MINIO_BUCKET_SILVER", "silver"),
             "spark.executorEnv.SILVER_WRITE_MODE": env("SILVER_WRITE_MODE", "append"),
+            "spark.executorEnv.ETL_PARTITION_STATE_PATH": env(
+                "ETL_PARTITION_STATE_PATH",
+                "s3a://bronze/_state/etl_partition_status.json",
+            ),
+            "spark.executorEnv.MAX_SILVER_DATES_PER_RUN": env("MAX_SILVER_DATES_PER_RUN", "7"),
+            "spark.executorEnv.SILVER_FULL_SCAN_FALLBACK": env("SILVER_FULL_SCAN_FALLBACK", "false"),
         }
     )
 
@@ -57,6 +63,17 @@ def silver_pipeline():
         jars=None,
         driver_class_path=CLASSPATH,
         conf=conf,
+        env_vars={
+            "MINIO_BUCKET_BRONZE": env("MINIO_BUCKET_BRONZE", "bronze"),
+            "MINIO_BUCKET_SILVER": env("MINIO_BUCKET_SILVER", "silver"),
+            "SILVER_WRITE_MODE": env("SILVER_WRITE_MODE", "append"),
+            "ETL_PARTITION_STATE_PATH": env(
+                "ETL_PARTITION_STATE_PATH",
+                "s3a://bronze/_state/etl_partition_status.json",
+            ),
+            "MAX_SILVER_DATES_PER_RUN": env("MAX_SILVER_DATES_PER_RUN", "7"),
+            "SILVER_FULL_SCAN_FALLBACK": env("SILVER_FULL_SCAN_FALLBACK", "false"),
+        },
         packages=None,
         name="SilverEcommerceEventsJob",
         verbose=True,

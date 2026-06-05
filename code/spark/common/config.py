@@ -19,6 +19,7 @@ class BronzeConfig:
     bronze_bucket: str
     output_path: str
     offset_file: str
+    partition_state_path: str
     shuffle_partitions: str
 
 
@@ -31,6 +32,9 @@ class SilverConfig:
     valid_output_path: str
     invalid_output_path: str
     write_mode: str
+    partition_state_path: str
+    max_dates_per_run: int
+    full_scan_fallback: bool
     shuffle_partitions: str
 
 
@@ -48,6 +52,24 @@ def require_env(name):
     return value
 
 
+def env_int(name, default):
+    raw_value = env(name)
+    if raw_value is None:
+        return int(default)
+    try:
+        return int(raw_value)
+    except ValueError:
+        print(f"[Config] Invalid {name}={raw_value!r}; using {default}.")
+        return int(default)
+
+
+def env_bool(name, default=False):
+    raw_value = env(name)
+    if raw_value is None:
+        return bool(default)
+    return str(raw_value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def load_minio_config():
     return MinioConfig(
         endpoint=env("MINIO_ENDPOINT", "http://minio:9000"),
@@ -61,6 +83,10 @@ def load_bronze_config():
     topic = env("KAFKA_TOPIC", "ecommerce_events")
     bronze_bucket = env("MINIO_BUCKET_BRONZE", "bronze")
     output_path = f"s3a://{bronze_bucket}/ecommerce_events/"
+    state_path = env(
+        "ETL_PARTITION_STATE_PATH",
+        f"s3a://{bronze_bucket}/_state/etl_partition_status.json",
+    )
 
     return BronzeConfig(
         kafka_bootstrap=env("KAFKA_BOOTSTRAP", "kafka-kraft:29092"),
@@ -69,6 +95,7 @@ def load_bronze_config():
         bronze_bucket=bronze_bucket,
         output_path=output_path,
         offset_file=f"s3a://{bronze_bucket}/_offsets/{topic}.json",
+        partition_state_path=state_path,
         shuffle_partitions=env("SPARK_SHUFFLE_PARTITIONS", "4"),
     )
 
@@ -86,5 +113,11 @@ def load_silver_config():
         valid_output_path=f"s3a://{silver_bucket}/ecommerce_events/",
         invalid_output_path=f"s3a://{silver_bucket}/ecommerce_events_invalid/",
         write_mode=env("SILVER_WRITE_MODE", "append").strip().lower(),
+        partition_state_path=env(
+            "ETL_PARTITION_STATE_PATH",
+            f"s3a://{bronze_bucket}/_state/etl_partition_status.json",
+        ),
+        max_dates_per_run=env_int("MAX_SILVER_DATES_PER_RUN", 7),
+        full_scan_fallback=env_bool("SILVER_FULL_SCAN_FALLBACK", False),
         shuffle_partitions=env("SPARK_SHUFFLE_PARTITIONS", "4"),
     )

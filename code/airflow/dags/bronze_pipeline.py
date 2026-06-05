@@ -48,6 +48,10 @@ def bronze_pipeline():
             "spark.executorEnv.KAFKA_BOOTSTRAP": env("KAFKA_BOOTSTRAP", "kafka-kraft:29092"),
             "spark.executorEnv.KAFKA_TOPIC": env("KAFKA_TOPIC", "ecommerce_events"),
             "spark.executorEnv.MINIO_BUCKET_BRONZE": env("MINIO_BUCKET_BRONZE", "bronze"),
+            "spark.executorEnv.ETL_PARTITION_STATE_PATH": env(
+                "ETL_PARTITION_STATE_PATH",
+                "s3a://bronze/_state/etl_partition_status.json",
+            ),
         }
     )
 
@@ -67,6 +71,15 @@ def bronze_pipeline():
         driver_class_path=CLASSPATH,
 
         conf=conf,
+        env_vars={
+            "KAFKA_BOOTSTRAP": env("KAFKA_BOOTSTRAP", "kafka-kraft:29092"),
+            "KAFKA_TOPIC": env("KAFKA_TOPIC", "ecommerce_events"),
+            "MINIO_BUCKET_BRONZE": env("MINIO_BUCKET_BRONZE", "bronze"),
+            "ETL_PARTITION_STATE_PATH": env(
+                "ETL_PARTITION_STATE_PATH",
+                "s3a://bronze/_state/etl_partition_status.json",
+            ),
+        },
 
         # Không dùng packages — tránh Ivy resolver chạy mỗi lần submit
         packages=None,

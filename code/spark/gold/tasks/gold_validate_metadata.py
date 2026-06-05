@@ -14,6 +14,8 @@ from gold.config import (
     DEFAULT_GOLD_NAMESPACE,
     DEFAULT_METADATA_NAMESPACE,
     DEFAULT_METADATA_WAREHOUSE,
+    DEFAULT_REFRESH_MODE,
+    REFRESH_MODE_INCREMENTAL,
     create_spark_session,
     load_runtime_config,
 )
@@ -33,7 +35,27 @@ def parse_args(argv=None):
     parser.add_argument("--catalog-name", default=DEFAULT_CATALOG)
     parser.add_argument("--metadata-namespace", default=DEFAULT_METADATA_NAMESPACE)
     parser.add_argument("--gold-namespace", default=DEFAULT_GOLD_NAMESPACE)
+    parser.add_argument("--partition-state-path", default=None)
+    parser.add_argument("--gold-refresh-mode", default=DEFAULT_REFRESH_MODE)
     return parser.parse_args(argv)
+
+
+def mark_gold_error_if_needed(spark, args, error):
+    if not args.partition_state_path:
+        return
+    if str(args.gold_refresh_mode).strip().lower() != REFRESH_MODE_INCREMENTAL:
+        return
+
+    from common.partition_state import active_gold_dates, mark_gold_pending_with_error
+
+    partition_dates = active_gold_dates(spark, args.partition_state_path)
+    if partition_dates:
+        mark_gold_pending_with_error(
+            spark,
+            args.partition_state_path,
+            partition_dates,
+            error,
+        )
 
 
 def main(argv=None):
@@ -52,12 +74,16 @@ def main(argv=None):
     try:
         spark = create_spark_session(JOB_NAME, args.catalog_name, runtime_config)
         spark.sparkContext.setLogLevel("WARN")
-        row_counts = metadata.validate_metadata_catalogs(
-            spark=spark,
-            catalog_name=args.catalog_name,
-            metadata_namespace=args.metadata_namespace,
-            gold_namespace=args.gold_namespace,
-        )
+        try:
+            row_counts = metadata.validate_metadata_catalogs(
+                spark=spark,
+                catalog_name=args.catalog_name,
+                metadata_namespace=args.metadata_namespace,
+                gold_namespace=args.gold_namespace,
+            )
+        except Exception as exc:
+            mark_gold_error_if_needed(spark, args, exc)
+            raise
         for table_name, row_count in sorted(row_counts.items()):
             log(f"{table_name} rows: {row_count}")
     finally:

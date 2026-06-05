@@ -8,10 +8,19 @@ Spark Bronze Batch Job
 
 import json
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, current_timestamp, from_json, to_date
+from pyspark.sql.functions import (
+    col,
+    current_timestamp,
+    from_json,
+    lit,
+    regexp_replace,
+    to_date,
+    try_to_timestamp,
+)
 from pyspark.sql.types import StringType, StructField, StructType
 
 from common.config import load_bronze_config
+from common.partition_state import mark_bronze_done
 from common.s3a import apply_s3a_options
 
 # Schema của dữ liệu JSON (Bronze – giữ nguyên kiểu String)
@@ -25,6 +34,10 @@ ECOMMERCE_SCHEMA = StructType([
     StructField("price",         StringType(), True),
     StructField("user_id",       StringType(), True),
     StructField("user_session",  StringType(), True),
+    StructField("source_file",   StringType(), True),
+    StructField("ingestion_batch_id", StringType(), True),
+    StructField("chunk_id",      StringType(), True),
+    StructField("ingest_time",   StringType(), True),
 ])
 
 # ---------------------------------------------------------------------------
@@ -35,6 +48,7 @@ def create_spark_session(config):
     builder = apply_s3a_options(builder, config.minio)
     return (
         builder
+        .config("spark.sql.session.timeZone", "UTC")
         .config("spark.sql.shuffle.partitions", config.shuffle_partitions)
         .getOrCreate()
     )
@@ -85,6 +99,9 @@ def write_offsets(spark, config, offsets):
 # Transform: parse JSON, thêm metadata
 # ---------------------------------------------------------------------------
 def transform_bronze(raw_df):
+    event_time_clean = regexp_replace(col("event_time"), r"\s+UTC$", "")
+    event_ts_col = try_to_timestamp(event_time_clean, lit("yyyy-MM-dd HH:mm:ss"))
+
     parsed = (
         raw_df
         .selectExpr("CAST(value AS STRING) AS json_str", "timestamp", "partition", "offset")
@@ -96,9 +113,35 @@ def transform_bronze(raw_df):
         col("partition").alias("kafka_partition"),
         col("offset").alias("kafka_offset"),
     )
-    bronze = bronze.withColumn("ingested_at",     current_timestamp())
-    bronze = bronze.withColumn("date_partition",  to_date(col("kafka_ts")))
+    bronze = bronze.withColumn("event_ts", event_ts_col)
+    bronze = bronze.withColumn("event_date", to_date(col("event_ts")))
+    bronze = bronze.withColumn("ingested_at", current_timestamp())
+    bronze = bronze.withColumn("kafka_date", to_date(col("kafka_ts")))
+    # Backward-compatible column name; new physical partition is event_date.
+    bronze = bronze.withColumn("date_partition", col("event_date"))
     return bronze
+
+
+def collect_affected_dates(bronze_df):
+    rows = (
+        bronze_df
+        .where(col("event_date").isNotNull())
+        .groupBy("event_date")
+        .count()
+        .collect()
+    )
+    return {row["event_date"]: row["count"] for row in rows}
+
+
+def collect_affected_batches(bronze_df):
+    rows = (
+        bronze_df
+        .select("ingestion_batch_id")
+        .where(col("ingestion_batch_id").isNotNull())
+        .distinct()
+        .collect()
+    )
+    return [row["ingestion_batch_id"] for row in rows]
 
 
 # ---------------------------------------------------------------------------
@@ -111,6 +154,7 @@ def main():
     print("  Spark Bronze Batch Job")
     print(f"  Kafka  : {config.kafka_bootstrap} / {config.kafka_topic}")
     print(f"  Output : {config.output_path}")
+    print(f"  State  : {config.partition_state_path}")
     print("=" * 60)
 
     spark = create_spark_session(config)
@@ -143,14 +187,31 @@ def main():
     raw_df.cache()
 
     # 4. Transform & ghi Parquet
-    bronze_df = transform_bronze(raw_df)
+    bronze_df = transform_bronze(raw_df).cache()
+    affected_dates = collect_affected_dates(bronze_df)
+    affected_batches = collect_affected_batches(bronze_df)
+
     bronze_df.write \
         .mode("append") \
-        .partitionBy("date_partition") \
+        .partitionBy("event_date") \
         .parquet(config.output_path)
 
     row_count = raw_df.count()
     print(f"[Bronze] Written {row_count} rows to {config.output_path}")
+    print(f"[Bronze] Affected event_dates: {sorted(str(date) for date in affected_dates)}")
+
+    # Update partition state before committing Kafka offsets. If this fails,
+    # the next Bronze run can safely reread offsets; Silver deduplicates by event.
+    updated_dates = mark_bronze_done(
+        spark,
+        config.partition_state_path,
+        affected_dates,
+        affected_batches,
+    )
+    if updated_dates:
+        print(f"[Bronze] Updated partition state for dates: {updated_dates}")
+    else:
+        print("[Bronze] No non-null event_date found; partition state unchanged.")
 
     # 5. Cập nhật offset (max_offset + 1 cho mỗi partition)
     max_offsets = {
@@ -164,6 +225,7 @@ def main():
     write_offsets(spark, config, max_offsets)
     print(f"[Bronze] Updated offsets: {max_offsets}")
 
+    bronze_df.unpersist()
     raw_df.unpersist()
     print("[Bronze] Completed successfully.")
     spark.stop()

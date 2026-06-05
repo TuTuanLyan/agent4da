@@ -18,7 +18,7 @@ CSV/sample data
 ```
 
 README nay ghi lai tinh trang repo hien tai, doc tu source code va docs tai
-ngay 2026-06-01. Muc dich la lam tai lieu tong quan de tiep tuc hoi/len ke
+ngay 2026-06-05. Muc dich la lam tai lieu tong quan de tiep tuc hoi/len ke
 hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
 
 ## 1. Tinh trang hien tai
@@ -29,12 +29,14 @@ hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
   Trino, Agent backend va Frontend UI.
 - Spark standalone dang tach `spark-master` va `spark-worker` thanh cac
   container rieng.
-- Bronze batch job doc Kafka theo offset da luu tren MinIO, parse JSON va ghi
-  Parquet vao bucket `bronze`.
-- Silver batch job doc Bronze Parquet, normalize schema, validate data quality,
-  deduplicate theo `event_fingerprint`, tach valid/invalid va ghi Parquet vao
-  bucket `silver`.
-- Gold pipeline moi da duoc refactor thanh cac task doc lap:
+- Bronze batch job doc Kafka theo offset da luu tren MinIO, parse JSON, parse
+  `event_time` thanh `event_date`, ghi Parquet partition-aware vao bucket
+  `bronze`, va cap nhat manifest state cac ngay bi anh huong.
+- Silver batch job doc cac Bronze partition dang pending theo `event_date`,
+  normalize schema, validate data quality, deduplicate theo `event_fingerprint`,
+  replace valid/invalid partitions va cap nhat state cho Gold incremental.
+- Gold pipeline moi da duoc refactor thanh cac task doc lap va default chay
+  incremental theo manifest `event_date` pending:
   - `gold_prepare_events`
   - `gold_build_facts`
   - `gold_build_dimensions`
@@ -42,6 +44,9 @@ hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
   - `gold_build_daily_product_summary`
   - `gold_build_daily_category_summary`
   - `gold_build_daily_brand_summary`
+  - `refresh_gold_metadata`
+  - `validate_gold_metadata`
+  - `mark_gold_done`
 - Gold tables dung Apache Iceberg tren MinIO. PostgreSQL duoc dung lam JDBC
   catalog metadata cho Iceberg, khong luu row data that cua Gold.
 - Trino co connector Iceberg va PostgreSQL, duoc expose local port `8082`.
@@ -72,8 +77,10 @@ hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
   `iceberg.metadata.semantic_column_catalog`.
 - Gold metadata moi mo ta table/column cho Agent. Metric catalog va join catalog
   chua thay trong code runtime hien tai.
-- Gold refresh mode hien tai la `full_refresh`; incremental/MERGE chua
-  implement.
+- Gold dimension incremental cho `dim_product`, `dim_user`, `dim_session` recompute
+  cac key xuat hien trong batch moi. Neu reprocess mot ngay lam bien mat hoan
+  toan mot key cu, aggregate dimension co the can admin full refresh de loai bo
+  dong gop cu.
 - `Makefile all-up` dung `docker-compose.airflow.yml` lam PostgreSQL shared
   stack, nen khong start `docker-compose.postgre.yml` rieng trong luong all-up.
   `make all-up` va `make all-down` chay chung toan bo compose file cua stack
@@ -166,6 +173,10 @@ docker network create data_network
 
 ## 5. Data pipeline
 
+Spark DAGs dung cac JAR da mount san trong `/opt/project/jars` qua classpath.
+Khong dung `--packages`/Ivy download trong DAG run de tranh tai dependency lai
+moi lan chay.
+
 ### 5.1 Kafka ingest
 
 - Producer: `code/kafka/producer.py`.
@@ -176,7 +187,12 @@ docker network create data_network
 - Kafka internal bootstrap cho container: `kafka-kraft:29092`.
 - Kafka external bootstrap tren host: `localhost:9092`.
 
-Producer doc CSV, convert tung row thanh JSON va gui vao Kafka.
+Producer doc CSV, convert tung row thanh JSON va gui vao Kafka. Producer van
+manual theo file va khong chia batch theo ngay/thang. Moi record duoc them
+metadata `source_file`, `ingestion_batch_id`, `chunk_id`, `ingest_time`; producer
+flush theo `--chunk-size` de gui file lon theo chunk nhe hon. `--batch-id`
+hoac alias `--batch` chi dat `ingestion_batch_id` de trace/debug, khong phai
+batch theo ngay/thang.
 
 ### 5.2 Bronze
 
@@ -191,8 +207,11 @@ Logic chinh:
 
 - Doc Kafka batch voi `startingOffsets` lay tu file offset tren MinIO.
 - Parse JSON theo schema ecommerce dang string.
+- Parse `event_time` thanh `event_ts` va `event_date`.
 - Them Kafka metadata: `kafka_ts`, `kafka_partition`, `kafka_offset`.
-- Them `ingested_at` va `date_partition`.
+- Them producer metadata neu co: `source_file`, `ingestion_batch_id`,
+  `chunk_id`, `ingest_time`.
+- Them `ingested_at`, `kafka_date` va `date_partition` alias cho `event_date`.
 - Ghi Parquet append vao:
 
 ```text
@@ -204,6 +223,16 @@ s3a://bronze/ecommerce_events/
 ```text
 s3a://bronze/_offsets/ecommerce_events.json
 ```
+
+- Cap nhat manifest state mac dinh:
+
+```text
+s3a://bronze/_state/etl_partition_status.json
+```
+
+Voi moi `event_date` bi anh huong, Bronze set `bronze_status=DONE`,
+`silver_status=PENDING`, `gold_status=PENDING`. Offset Kafka chi duoc update sau
+khi ghi Bronze va manifest state thanh cong.
 
 Airflow schedule:
 
@@ -224,7 +253,14 @@ code/airflow/dags/silver_pipeline.py
 
 Logic chinh:
 
-- Doc Bronze Parquet tu:
+- Doc manifest state de lay toi da `MAX_SILVER_DATES_PER_RUN` ngay pending, mac
+  dinh 7:
+
+```text
+bronze_status = DONE AND silver_status = PENDING
+```
+
+- Doc chi cac Bronze partition theo `event_date` tu:
 
 ```text
 s3a://bronze/ecommerce_events/
@@ -246,7 +282,11 @@ s3a://bronze/ecommerce_events/
   - valid output: `s3a://silver/ecommerce_events/`
   - invalid output: `s3a://silver/ecommerce_events_invalid/`
 - Deduplicate valid events theo `event_fingerprint`.
-- Khi write mode `append`, job doc existing fingerprints de skip duplicate.
+- Replace valid/invalid Silver partitions theo `event_date` bang cach xoa
+  partition cu roi ghi lai partition moi.
+- Sau khi ghi thanh cong, set `silver_status=DONE`, `gold_status=PENDING`.
+- Legacy full-scan chi bat khi set `SILVER_FULL_SCAN_FALLBACK=true`; default la
+  khong doc toan bo Bronze.
 
 Airflow schedule:
 
@@ -284,7 +324,22 @@ gold_prepare_events
        gold_build_daily_category_summary,
        gold_build_daily_brand_summary
      ]
+  -> refresh_gold_metadata
+  -> validate_gold_metadata
+  -> mark_gold_done
 ```
+
+Default mode cua `gold_pipeline` la `incremental`. Moi run claim toi da
+`MAX_GOLD_DATES_PER_RUN` ngay, mac dinh 3, voi dieu kien
+`silver_status=DONE` va `gold_status=PENDING`/retryable. Staging, facts va
+summaries replace theo partition ngay; dimensions replace theo ngay hoac key bi
+anh huong. Full refresh chi danh cho admin/manual:
+
+```bash
+airflow dags trigger gold_pipeline --conf '{"mode":"full_refresh"}'
+```
+
+Full refresh khong update manifest status theo tung ngay.
 
 Gold staging:
 
@@ -348,6 +403,21 @@ code/spark/gold/metadata_definitions.py
 
 Agent dung metadata nay de biet bang/cot nao visible, grain, purpose,
 business terms va query notes.
+
+### 5.6 Data ETL batch processing
+
+Bronze/Silver/Gold da duoc chuyen sang partition-aware batch processing theo
+`event_date` duoc parse tu `event_time`. Producer van manual theo file CSV va
+khong chia batch theo ten file; Bronze doc Kafka theo offset, ghi partition
+`event_date`, va cap nhat manifest state cac date bi anh huong. Silver chi xu ly
+cac date pending va replace partition de tranh double count. Gold chi xu ly
+nhom nho cac ngay pending tu manifest, replace staging/fact/summary partitions,
+cap nhat dimensions theo key bi anh huong, refresh metadata, roi moi mark
+`gold_status=DONE`. Gold full refresh chi nen dung cho admin/manual rebuild,
+backfill, doi schema hoac doi logic nghiep vu. Tang Agent chua thay doi.
+
+Chi tiet thiet ke, file can sua, chien luoc Airflow trigger, idempotency va test
+nam trong `docs/DATA_ETL_BATCH_PROCESSING.md`.
 
 ## 6. Trino
 

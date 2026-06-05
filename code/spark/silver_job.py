@@ -1,17 +1,16 @@
 """
 Spark Silver Batch Job
 
-Read Bronze e-commerce events from MinIO, normalize types, add data-quality
-flags, and write clean Silver Parquet outputs.
+Read pending Bronze event_date partitions from MinIO, normalize types, add
+data-quality flags, and replace matching Silver Parquet partitions.
 
 Note on idempotency:
 source_event_id is kept for Kafka lineage. event_fingerprint is built from the
-business event content and is used for deduplication. In append mode, the job
-reads existing Silver fingerprints and left-anti joins before writing, so reruns
-or repeated ingestion of the same file do not append duplicate valid events.
-Because the output is still plain Parquet, this is intended for batch
-single-writer usage. Use Iceberg/Delta MERGE later if multiple Silver jobs can
-write at the same time.
+business event content and is used for deduplication. The default path reads
+only manifest-pending event_date partitions, deletes the matching Silver output
+partitions, then writes the replacement rows. Because the output is still plain
+Parquet, this is intended for batch single-writer usage. Use Iceberg/Delta MERGE
+later if multiple Silver jobs can write at the same time.
 """
 
 from pyspark.errors import AnalysisException
@@ -43,6 +42,12 @@ from pyspark.sql.functions import (
 from pyspark.sql.window import Window
 
 from common.config import load_silver_config
+from common.partition_state import (
+    format_partition_date,
+    mark_silver_done,
+    mark_silver_pending_with_error,
+    pending_silver_dates,
+)
 from common.s3a import apply_s3a_options
 
 
@@ -91,6 +96,7 @@ def create_spark_session(config):
     return (
         builder
         .config("spark.sql.session.timeZone", "UTC")
+        .config("spark.sql.sources.partitionOverwriteMode", "dynamic")
         .config("spark.sql.shuffle.partitions", config.shuffle_partitions)
         .getOrCreate()
     )
@@ -104,6 +110,21 @@ def path_exists(spark, path):
     return fs.exists(jvm.org.apache.hadoop.fs.Path(path))
 
 
+def delete_path_if_exists(spark, path):
+    hadoop_conf = spark.sparkContext._jsc.hadoopConfiguration()
+    jvm = spark.sparkContext._jvm
+    uri = jvm.java.net.URI(path)
+    fs = jvm.org.apache.hadoop.fs.FileSystem.get(uri, hadoop_conf)
+    hadoop_path = jvm.org.apache.hadoop.fs.Path(path)
+    if fs.exists(hadoop_path):
+        return fs.delete(hadoop_path, True)
+    return False
+
+
+def event_date_partition_path(base_path, partition_date):
+    return f"{base_path.rstrip('/')}/event_date={partition_date}"
+
+
 def read_bronze_dataframe(spark, config):
     if not path_exists(spark, config.input_path):
         log(f"No Bronze data found at {config.input_path}. Exiting safely.")
@@ -115,6 +136,35 @@ def read_bronze_dataframe(spark, config):
         log(f"No readable Bronze parquet at {config.input_path}.")
         log(f"Spark message: {exc}")
         return None
+
+
+def read_bronze_dataframe_for_dates(spark, config, partition_dates):
+    if not path_exists(spark, config.input_path):
+        log(f"No Bronze data found at {config.input_path}. Exiting safely.")
+        return None, [], list(partition_dates)
+
+    existing_paths = []
+    readable_dates = []
+    missing_dates = []
+
+    for partition_date in partition_dates:
+        path = event_date_partition_path(config.input_path, partition_date)
+        if path_exists(spark, path):
+            existing_paths.append(path)
+            readable_dates.append(partition_date)
+        else:
+            missing_dates.append(partition_date)
+
+    if not existing_paths:
+        return None, readable_dates, missing_dates
+
+    try:
+        bronze_df = spark.read.option("basePath", config.input_path).parquet(*existing_paths)
+        return bronze_df, readable_dates, missing_dates
+    except AnalysisException as exc:
+        log(f"No readable Bronze event_date partitions at {config.input_path}.")
+        log(f"Spark message: {exc}")
+        return None, readable_dates, partition_dates
 
 
 def normalize_empty_to_null(value_col):
@@ -139,6 +189,16 @@ def try_cast_column(column_name, target_type):
     return expr(f"try_cast({column_name} as {target_type})")
 
 
+def column_exists(df, column_name):
+    return column_name in df.columns
+
+
+def optional_cast_column(df, column_name, target_type):
+    if column_exists(df, column_name):
+        return expr(f"try_cast({column_name} as {target_type})")
+    return lit(None).cast(target_type)
+
+
 def fingerprint_value(value_col):
     return coalesce(value_col.cast("string"), lit("_null_"))
 
@@ -159,17 +219,22 @@ def event_fingerprint_expr():
 
 
 def build_silver_dataframe(bronze_df):
-    event_time_clean = regexp_replace(col("event_time"), r"\s+UTC$", "")
-    event_ts_col = try_to_timestamp(
-        event_time_clean,
-        lit("yyyy-MM-dd HH:mm:ss"),
-    )
+    if column_exists(bronze_df, "event_ts"):
+        event_ts_col = optional_cast_column(bronze_df, "event_ts", "timestamp")
+    else:
+        event_time_clean = regexp_replace(col("event_time"), r"\s+UTC$", "")
+        event_ts_col = try_to_timestamp(
+            event_time_clean,
+            lit("yyyy-MM-dd HH:mm:ss"),
+        )
+    event_date_col = optional_cast_column(bronze_df, "event_date", "date")
     category_code_col = normalize_empty_to_null(col("category_code"))
     brand_clean = normalize_empty_to_null(col("brand"))
     brand_col = when(brand_clean.isNull(), lit("unknown")).otherwise(brand_clean)
 
     silver = bronze_df.select(
         event_ts_col.alias("event_ts"),
+        event_date_col.alias("_bronze_event_date"),
         lower(trim(col("event_type"))).alias("event_type"),
         try_cast_column("product_id", "bigint").alias("product_id"),
         try_cast_column("category_id", "bigint").alias("category_id"),
@@ -187,7 +252,7 @@ def build_silver_dataframe(bronze_df):
 
     silver = (
         silver
-        .withColumn("event_date", to_date(col("event_ts")))
+        .withColumn("event_date", coalesce(col("_bronze_event_date"), to_date(col("event_ts"))))
         .withColumn("event_year", year(col("event_ts")))
         .withColumn("event_month", month(col("event_ts")))
         .withColumn("event_day", dayofmonth(col("event_ts")))
@@ -212,6 +277,7 @@ def build_silver_dataframe(bronze_df):
             ),
         )
         .withColumn("event_fingerprint", event_fingerprint_expr())
+        .drop("_bronze_event_date")
     )
     
     missing_event_ts = col("event_ts").isNull()
@@ -307,6 +373,75 @@ def normalize_write_mode(mode):
     return "append"
 
 
+def collect_count_by_date(df):
+    rows = df.groupBy("event_date").count().collect()
+    counts = {}
+    for row in rows:
+        partition_date = format_partition_date(row["event_date"])
+        if partition_date is not None:
+            counts[partition_date] = int(row["count"])
+    return counts
+
+
+def write_df_if_not_empty(df, output_path):
+    if df.limit(1).count() == 0:
+        return 0
+    row_count = df.count()
+    (
+        df.write
+        .mode("append")
+        .partitionBy("event_date")
+        .parquet(output_path)
+    )
+    return row_count
+
+
+def replace_event_date_partitions(spark, output_path, partition_dates):
+    for partition_date in partition_dates:
+        path = event_date_partition_path(output_path, partition_date)
+        deleted = delete_path_if_exists(spark, path)
+        if deleted:
+            log(f"Deleted old Silver partition: {path}")
+
+
+def write_partition_outputs(silver_df, config, partition_dates):
+    spark = silver_df.sparkSession
+    valid_df = silver_df.where(col("is_valid"))
+    invalid_df = silver_df.where(~col("is_valid"))
+    valid_dedup_df = deduplicate_valid_events(valid_df).cache()
+    invalid_output_df = invalid_df.cache()
+
+    try:
+        valid_count = valid_df.count()
+        invalid_count = invalid_df.count()
+        valid_dedup_count = valid_dedup_df.count()
+        skipped_duplicate_count = valid_count - valid_dedup_count
+        valid_counts_by_date = collect_count_by_date(valid_dedup_df)
+        invalid_counts_by_date = collect_count_by_date(invalid_output_df)
+
+        log(f"Valid rows before dedup : {valid_count}")
+        log(f"Invalid rows            : {invalid_count}")
+        log(f"Valid rows after dedup  : {valid_dedup_count}")
+        log(f"Valid duplicate fingerprints skipped : {skipped_duplicate_count}")
+        log(f"Replacing event_dates   : {partition_dates}")
+        log("Output schema:")
+        valid_dedup_df.printSchema()
+        log("Sample valid rows:")
+        valid_dedup_df.show(5, truncate=False)
+
+        replace_event_date_partitions(spark, config.valid_output_path, partition_dates)
+        replace_event_date_partitions(spark, config.invalid_output_path, partition_dates)
+
+        written_valid = write_df_if_not_empty(valid_dedup_df, config.valid_output_path)
+        written_invalid = write_df_if_not_empty(invalid_output_df, config.invalid_output_path)
+        log(f"Valid rows written      : {written_valid}")
+        log(f"Invalid rows written    : {written_invalid}")
+        return valid_counts_by_date, invalid_counts_by_date
+    finally:
+        invalid_output_df.unpersist()
+        valid_dedup_df.unpersist()
+
+
 def write_outputs(silver_df, config):
     spark = silver_df.sparkSession
     write_mode = normalize_write_mode(config.write_mode)
@@ -382,30 +517,99 @@ def main():
     print(f"  Input         : {config.input_path}")
     print(f"  Output valid  : {config.valid_output_path}")
     print(f"  Output invalid: {config.invalid_output_path}")
+    print(f"  State         : {config.partition_state_path}")
+    print(f"  Max dates/run : {config.max_dates_per_run}")
     print("=" * 70)
 
     spark = create_spark_session(config)
     spark.sparkContext.setLogLevel("WARN")
+    selected_dates = []
+    readable_dates = []
 
     try:
-        bronze_df = read_bronze_dataframe(spark, config)
-        if bronze_df is None:
+        selected_dates = pending_silver_dates(
+            spark,
+            config.partition_state_path,
+            config.max_dates_per_run,
+        )
+        log(f"Pending event_dates selected: {selected_dates}")
+
+        if not selected_dates:
+            if not config.full_scan_fallback:
+                log("No pending event_date partitions. Exiting safely.")
+                return
+
+            log("SILVER_FULL_SCAN_FALLBACK enabled; running legacy full scan.")
+            bronze_df = read_bronze_dataframe(spark, config)
+            if bronze_df is None:
+                return
+            bronze_df.cache()
+            total_rows = bronze_df.count()
+            log(f"Total Bronze rows read: {total_rows}")
+            silver_df = build_silver_dataframe(bronze_df).cache()
+            write_outputs(silver_df, config)
+            silver_df.unpersist()
+            bronze_df.unpersist()
+            log("Completed legacy full-scan Silver run.")
             return
 
-        if bronze_df.limit(1).count() == 0:
-            log(f"Bronze path is empty at {config.input_path}. Exiting safely.")
-            return
+        bronze_df, readable_dates, missing_dates = read_bronze_dataframe_for_dates(
+            spark,
+            config,
+            selected_dates,
+        )
+        if missing_dates:
+            message = "Missing Bronze event_date partition(s): " + ", ".join(missing_dates)
+            log(message)
+            mark_silver_pending_with_error(
+                spark,
+                config.partition_state_path,
+                missing_dates,
+                message,
+            )
+
+        if bronze_df is None or not readable_dates:
+            raise RuntimeError("No readable Bronze partitions for selected pending dates.")
 
         bronze_df.cache()
         total_rows = bronze_df.count()
-        log(f"Total Bronze rows read: {total_rows}")
+        log(f"Total Bronze rows read from pending partitions: {total_rows}")
 
-        silver_df = build_silver_dataframe(bronze_df).cache()
-        write_outputs(silver_df, config)
+        silver_df = (
+            build_silver_dataframe(bronze_df)
+            .where(col("event_date").cast("string").isin(readable_dates))
+            .cache()
+        )
+        valid_counts, invalid_counts = write_partition_outputs(
+            silver_df,
+            config,
+            readable_dates,
+        )
+        updated_dates = mark_silver_done(
+            spark,
+            config.partition_state_path,
+            readable_dates,
+            valid_counts,
+            invalid_counts,
+        )
+        log(f"Marked Silver DONE for dates: {updated_dates}")
 
         silver_df.unpersist()
         bronze_df.unpersist()
         log("Completed successfully.")
+    except Exception as exc:
+        failed_dates = readable_dates or selected_dates
+        if failed_dates:
+            try:
+                mark_silver_pending_with_error(
+                    spark,
+                    config.partition_state_path,
+                    failed_dates,
+                    exc,
+                )
+            except Exception as state_exc:
+                log(f"Failed to update Silver error state: {state_exc}")
+        raise
     finally:
         spark.stop()
 

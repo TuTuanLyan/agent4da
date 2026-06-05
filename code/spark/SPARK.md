@@ -1,12 +1,28 @@
 # Spark Jobs
 
-Spark layer hiện được giữ đơn giản trước: Bronze và Silver là hai job đang chạy
-chính. Gold hiện tại đã được đưa vào `_archive/` để sau này build lại sạch hơn.
+Spark layer gồm Bronze, Silver và Gold. Bronze/Silver ghi Parquet trên MinIO;
+Gold ghi Apache Iceberg tables trên MinIO với PostgreSQL JDBC catalog.
 
 ## Current Entrypoints
 
-- `bronze_job.py`: đọc Kafka topic `ecommerce_events`, ghi Parquet vào `s3a://bronze/ecommerce_events/`.
-- `silver_job.py`: đọc Bronze Parquet, chuẩn hóa dữ liệu, ghi valid/invalid Silver Parquet.
+- `bronze_job.py`: đọc Kafka topic `ecommerce_events` theo offset, parse
+  `event_time` thành `event_date`, ghi Parquet partitioned by `event_date` vào
+  `s3a://bronze/ecommerce_events/`, và cập nhật manifest state.
+- `silver_job.py`: đọc manifest state, xử lý các Bronze partition pending theo
+  `event_date`, chuẩn hóa dữ liệu, replace valid/invalid Silver Parquet
+  partitions.
+- `gold/tasks/gold_prepare_events.py`: claim Gold pending dates từ manifest,
+  đọc Silver partitions tương ứng và replace staging partitions.
+- `gold/tasks/gold_build_facts.py`: build `fact_events`/`fact_sales` và replace
+  theo `event_date`/`sale_date`.
+- `gold/tasks/gold_build_dimensions.py`: build dimensions incremental theo
+  `event_date` hoặc affected keys.
+- `gold/tasks/gold_build_summaries.py`: recompute daily summaries cho active
+  dates và replace summary partitions.
+- `gold/tasks/gold_build_metadata.py` và `gold_validate_metadata.py`: full
+  refresh/validate semantic metadata cho Agent context.
+- `gold/tasks/gold_mark_done.py`: mark active Gold dates `DONE` sau khi data
+  tasks và metadata validation thành công.
 
 ## Current Structure
 
@@ -16,19 +32,24 @@ code/spark/
 ├── silver_job.py
 ├── common/
 │   ├── __init__.py
+│   ├── partition_state.py
 │   ├── config.py
 │   └── s3a.py
-└── _archive/
+└── gold/
+    ├── config.py
+    ├── writers.py
+    └── tasks/
 ```
 
 ## Design Rule
 
 - Bronze config chỉ nằm trong `load_bronze_config()`.
 - Silver config chỉ nằm trong `load_silver_config()`.
+- Gold/Iceberg config nằm trong `code/spark/gold/config.py`, không trộn vào
+  Bronze/Silver config.
 - Mỗi job tự tạo SparkSession trong chính file job.
-- `common/` chỉ chứa helper nhỏ, không chứa factory SparkSession có nhánh Gold/Iceberg.
+- `common/` chỉ chứa helper nhỏ và manifest state interface.
 - Không dùng `spark.jars.packages`; DAG/script dùng JAR local đã mount.
-- Gold/Iceberg config sẽ được thêm lại sau trong module riêng, không trộn vào Bronze/Silver.
 
 ## Manual Run
 
@@ -38,19 +59,28 @@ code/spark/
 ```
 
 Active submit scripts chỉ load `envs/minio.env`, `envs/spark.env`, và
-`envs/airflow.env`. Gold/Iceberg scripts, kể cả script tải Iceberg JAR, đã được
-đưa vào `script/spark/_archive/`.
+`envs/airflow.env`.
+
+State tracking cho Bronze/Silver hiện dùng manifest JSON mặc định:
+
+```text
+s3a://bronze/_state/etl_partition_status.json
+```
+
+Silver mặc định xử lý tối đa 7 ngày mỗi run, có thể đổi bằng
+`MAX_SILVER_DATES_PER_RUN`. Legacy full scan chỉ bật khi
+`SILVER_FULL_SCAN_FALLBACK=true`.
+
+Gold mặc định xử lý tối đa 3 ngày mỗi run, có thể đổi bằng
+`MAX_GOLD_DATES_PER_RUN`. Default mode là `incremental`; `full_refresh` chỉ dành
+cho admin/manual rebuild.
 
 ## Airflow DAGs
 
 - `code/airflow/dags/bronze_pipeline.py`
 - `code/airflow/dags/silver_pipeline.py`
-
-Gold DAG hiện nằm trong:
-
-```text
-code/airflow/dags/_disabled/gold_pipeline.py.disabled
-```
+- `code/airflow/dags/gold_pipeline.py`
+- `code/airflow/dags/gold_metadata_pipeline.py`
 
 ## JARs
 

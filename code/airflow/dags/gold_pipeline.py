@@ -24,17 +24,32 @@ ICEBERG_JDBC_SCHEMA = env("ICEBERG_JDBC_SCHEMA", "iceberg")
 ICEBERG_JDBC_USER = require_env("ICEBERG_JDBC_USER")
 ICEBERG_JDBC_PASSWORD = require_env("ICEBERG_JDBC_PASSWORD")
 GOLD_BUCKET = env("MINIO_BUCKET_GOLD", "gold")
+BRONZE_BUCKET = env("MINIO_BUCKET_BRONZE", "bronze")
 GOLD_STORAGE_ROOT = env("GOLD_STORAGE_ROOT", f"s3a://{GOLD_BUCKET}").rstrip("/")
 GOLD_STAGING_BASE_PATH = env(
     "GOLD_STAGING_BASE_PATH",
     f"{GOLD_STORAGE_ROOT}/gold_staging",
 ).rstrip("/")
 GOLD_BASE_PATH = env("GOLD_BASE_PATH", f"{GOLD_STORAGE_ROOT}/gold").rstrip("/")
+DEFAULT_METADATA_BASE_PATH = f"{GOLD_STORAGE_ROOT}/metadata"
+METADATA_BASE_PATH = env(
+    "GOLD_METADATA_BASE_PATH",
+    env("METADATA_BASE_PATH", DEFAULT_METADATA_BASE_PATH),
+).rstrip("/")
 GOLD_STAGING_WAREHOUSE = env(
     "GOLD_STAGING_ICEBERG_WAREHOUSE",
     f"{GOLD_STAGING_BASE_PATH}/warehouse",
 )
 GOLD_WAREHOUSE = env("GOLD_ICEBERG_WAREHOUSE", f"{GOLD_BASE_PATH}/warehouse")
+METADATA_WAREHOUSE = env(
+    "GOLD_METADATA_ICEBERG_WAREHOUSE",
+    f"{METADATA_BASE_PATH}/warehouse",
+)
+ETL_PARTITION_STATE_PATH = env(
+    "ETL_PARTITION_STATE_PATH",
+    f"s3a://{BRONZE_BUCKET}/_state/etl_partition_status.json",
+)
+MAX_GOLD_DATES_PER_RUN = env("MAX_GOLD_DATES_PER_RUN", "3")
 
 GOLD_JARS = [
     f"{JARS_DIR}/iceberg-spark-runtime-4.0_2.13-1.10.1.jar",
@@ -47,6 +62,7 @@ STAGING_NAMESPACE = "gold_staging"
 STAGING_TABLE = "stg_events"
 STAGING_PATH = f"{GOLD_STAGING_BASE_PATH}/stg_events"
 GOLD_NAMESPACE = "gold"
+METADATA_NAMESPACE = env("METADATA_NAMESPACE", "metadata")
 FACT_EVENTS_TABLE = "fact_events"
 FACT_SALES_TABLE = "fact_sales"
 FACT_EVENTS_PATH = f"{GOLD_BASE_PATH}/fact_events"
@@ -67,7 +83,9 @@ DAILY_EVENT_SUMMARY_PATH = f"{GOLD_BASE_PATH}/daily_event_summary"
 DAILY_PRODUCT_SUMMARY_PATH = f"{GOLD_BASE_PATH}/daily_product_summary"
 DAILY_CATEGORY_SUMMARY_PATH = f"{GOLD_BASE_PATH}/daily_category_summary"
 DAILY_BRAND_SUMMARY_PATH = f"{GOLD_BASE_PATH}/daily_brand_summary"
-REFRESH_MODE = "full_refresh"
+DEFAULT_REFRESH_MODE = env("GOLD_REFRESH_MODE", "incremental")
+REFRESH_MODE = "{{ dag_run.conf.get('mode', '" + DEFAULT_REFRESH_MODE + "') }}"
+METADATA_REFRESH_MODE = "full_refresh"
 
 
 default_args = {
@@ -119,6 +137,10 @@ def gold_spark_conf(warehouse):
             "spark.executorEnv.GOLD_STORAGE_ROOT": GOLD_STORAGE_ROOT,
             "spark.executorEnv.GOLD_STAGING_BASE_PATH": GOLD_STAGING_BASE_PATH,
             "spark.executorEnv.GOLD_BASE_PATH": GOLD_BASE_PATH,
+            "spark.executorEnv.GOLD_METADATA_BASE_PATH": METADATA_BASE_PATH,
+            "spark.executorEnv.GOLD_METADATA_ICEBERG_WAREHOUSE": METADATA_WAREHOUSE,
+            "spark.executorEnv.ETL_PARTITION_STATE_PATH": ETL_PARTITION_STATE_PATH,
+            "spark.executorEnv.MAX_GOLD_DATES_PER_RUN": MAX_GOLD_DATES_PER_RUN,
         }
     )
     return conf
@@ -140,6 +162,10 @@ def gold_env_vars(warehouse):
         "GOLD_STORAGE_ROOT": GOLD_STORAGE_ROOT,
         "GOLD_STAGING_BASE_PATH": GOLD_STAGING_BASE_PATH,
         "GOLD_BASE_PATH": GOLD_BASE_PATH,
+        "GOLD_METADATA_BASE_PATH": METADATA_BASE_PATH,
+        "GOLD_METADATA_ICEBERG_WAREHOUSE": METADATA_WAREHOUSE,
+        "ETL_PARTITION_STATE_PATH": ETL_PARTITION_STATE_PATH,
+        "MAX_GOLD_DATES_PER_RUN": MAX_GOLD_DATES_PER_RUN,
     }
 
 
@@ -177,6 +203,8 @@ def summary_application_args(summary):
         summary,
         "--refresh-mode",
         REFRESH_MODE,
+        "--state-path",
+        ETL_PARTITION_STATE_PATH,
     ]
 
 
@@ -227,6 +255,12 @@ def gold_pipeline():
             STAGING_PATH,
             "--refresh-mode",
             REFRESH_MODE,
+            "--state-path",
+            ETL_PARTITION_STATE_PATH,
+            "--max-dates-per-run",
+            MAX_GOLD_DATES_PER_RUN,
+            "--run-id",
+            "{{ run_id }}",
         ],
         jars=None,
         driver_class_path=CLASSPATH,
@@ -261,6 +295,8 @@ def gold_pipeline():
             FACT_SALES_PATH,
             "--refresh-mode",
             REFRESH_MODE,
+            "--state-path",
+            ETL_PARTITION_STATE_PATH,
         ],
         jars=None,
         driver_class_path=CLASSPATH,
@@ -309,6 +345,8 @@ def gold_pipeline():
             DIM_SESSION_PATH,
             "--refresh-mode",
             REFRESH_MODE,
+            "--state-path",
+            ETL_PARTITION_STATE_PATH,
         ],
         jars=None,
         driver_class_path=CLASSPATH,
@@ -340,14 +378,94 @@ def gold_pipeline():
         "brand",
         "GoldBuildDailyBrandSummary",
     )
+    refresh_gold_metadata = SparkSubmitOperator(
+        task_id="refresh_gold_metadata",
+        conn_id="spark_default",
+        application="/opt/project/code/spark/gold/tasks/gold_build_metadata.py",
+        application_args=[
+            "--catalog-name",
+            ICEBERG_CATALOG_NAME,
+            "--metadata-namespace",
+            METADATA_NAMESPACE,
+            "--gold-namespace",
+            GOLD_NAMESPACE,
+            "--metadata-base-path",
+            METADATA_BASE_PATH,
+            "--refresh-mode",
+            METADATA_REFRESH_MODE,
+            "--partition-state-path",
+            ETL_PARTITION_STATE_PATH,
+            "--gold-refresh-mode",
+            REFRESH_MODE,
+        ],
+        jars=None,
+        driver_class_path=CLASSPATH,
+        conf=gold_spark_conf(METADATA_WAREHOUSE),
+        env_vars=gold_env_vars(METADATA_WAREHOUSE),
+        packages=None,
+        name="RefreshGoldMetadata",
+        verbose=True,
+        execution_timeout=timedelta(minutes=15),
+    )
 
-    prepare_events >> build_facts >> build_dimensions
-    build_dimensions >> [
+    validate_gold_metadata = SparkSubmitOperator(
+        task_id="validate_gold_metadata",
+        conn_id="spark_default",
+        application="/opt/project/code/spark/gold/tasks/gold_validate_metadata.py",
+        application_args=[
+            "--catalog-name",
+            ICEBERG_CATALOG_NAME,
+            "--metadata-namespace",
+            METADATA_NAMESPACE,
+            "--gold-namespace",
+            GOLD_NAMESPACE,
+            "--partition-state-path",
+            ETL_PARTITION_STATE_PATH,
+            "--gold-refresh-mode",
+            REFRESH_MODE,
+        ],
+        jars=None,
+        driver_class_path=CLASSPATH,
+        conf=gold_spark_conf(METADATA_WAREHOUSE),
+        env_vars=gold_env_vars(METADATA_WAREHOUSE),
+        packages=None,
+        name="ValidateGoldMetadata",
+        verbose=True,
+        execution_timeout=timedelta(minutes=15),
+    )
+
+    mark_gold_done = SparkSubmitOperator(
+        task_id="mark_gold_done",
+        conn_id="spark_default",
+        application="/opt/project/code/spark/gold/tasks/gold_mark_done.py",
+        application_args=[
+            "--catalog-name",
+            ICEBERG_CATALOG_NAME,
+            "--state-path",
+            ETL_PARTITION_STATE_PATH,
+            "--refresh-mode",
+            REFRESH_MODE,
+        ],
+        jars=None,
+        driver_class_path=CLASSPATH,
+        conf=gold_spark_conf(GOLD_WAREHOUSE),
+        env_vars=gold_env_vars(GOLD_WAREHOUSE),
+        packages=None,
+        name="GoldMarkDone",
+        verbose=True,
+        execution_timeout=timedelta(minutes=10),
+    )
+
+    summary_tasks = [
         build_daily_event_summary,
         build_daily_product_summary,
         build_daily_category_summary,
         build_daily_brand_summary,
     ]
+
+    prepare_events >> build_facts >> build_dimensions
+    build_dimensions >> summary_tasks
+    summary_tasks >> refresh_gold_metadata >> validate_gold_metadata >> mark_gold_done
 
 
 gold_pipeline()

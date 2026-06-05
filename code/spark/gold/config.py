@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass
 
-from common.config import env, load_minio_config, require_env
+from common.config import env, env_int, load_minio_config, require_env
 from common.s3a import apply_s3a_options
 
 from gold.identifiers import table_identifier
@@ -57,8 +57,16 @@ DAILY_BRAND_SUMMARY = "daily_brand_summary"
 SEMANTIC_TABLE_CATALOG = "semantic_table_catalog"
 SEMANTIC_COLUMN_CATALOG = "semantic_column_catalog"
 
-DEFAULT_REFRESH_MODE = "full_refresh"
+REFRESH_MODE_INCREMENTAL = "incremental"
+REFRESH_MODE_FULL = "full_refresh"
+DEFAULT_REFRESH_MODE = REFRESH_MODE_FULL
+DEFAULT_GOLD_REFRESH_MODE = env("GOLD_REFRESH_MODE", REFRESH_MODE_INCREMENTAL)
 DEFAULT_SILVER_PATH = "s3a://silver/ecommerce_events/"
+DEFAULT_PARTITION_STATE_PATH = env(
+    "ETL_PARTITION_STATE_PATH",
+    "s3a://bronze/_state/etl_partition_status.json",
+)
+DEFAULT_MAX_GOLD_DATES_PER_RUN = env_int("MAX_GOLD_DATES_PER_RUN", 3)
 
 DEFAULT_STAGING_WAREHOUSE = f"{DEFAULT_STAGING_BASE_PATH}/warehouse"
 DEFAULT_GOLD_WAREHOUSE = f"{DEFAULT_GOLD_BASE_PATH}/warehouse"
@@ -137,9 +145,20 @@ def create_spark_session(app_name, catalog_name, runtime_config):
 
 def require_full_refresh(refresh_mode, task_name):
     mode = str(refresh_mode).strip().lower()
-    if mode != DEFAULT_REFRESH_MODE:
+    if mode != REFRESH_MODE_FULL:
         raise NotImplementedError(
-            f"Incremental/MERGE refresh is not implemented for {task_name}; "
-            "use --refresh-mode full_refresh."
+            f"{task_name} only supports full_refresh; use --refresh-mode full_refresh."
         )
+    return mode
+
+
+def normalize_refresh_mode(refresh_mode, task_name, allow_incremental=True):
+    mode = str(refresh_mode).strip().lower()
+    allowed_modes = {REFRESH_MODE_FULL}
+    if allow_incremental:
+        allowed_modes.add(REFRESH_MODE_INCREMENTAL)
+
+    if mode not in allowed_modes:
+        allowed = ", ".join(sorted(allowed_modes))
+        raise ValueError(f"Unsupported refresh mode for {task_name}: {mode!r}; allowed: {allowed}.")
     return mode
