@@ -4,6 +4,7 @@ import asyncio
 import csv
 import io
 import json
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
@@ -167,6 +168,23 @@ def normalize_chart_type(value: Optional[str]) -> Optional[str]:
     return normalized if normalized in ALLOWED_CHART_TYPES else None
 
 
+def provider_for_model(model: Optional[str]) -> Optional[str]:
+    if not model:
+        return None
+    normalized = model.strip().lower()
+    if normalized.startswith("gemini-"):
+        return "gemini"
+    if normalized.startswith("llama-") or normalized.startswith("mixtral-") or normalized.startswith("gemma-"):
+        return "groq"
+    return None
+
+
+def resolve_llm_preferences(user: dict) -> tuple[Optional[str], Optional[str]]:
+    preferences = user.get("preferences") or {}
+    model = (preferences.get("default_model") or "").strip() or None
+    return provider_for_model(model), model
+
+
 def build_failed_result(run_id: str, question: str, session_id: Optional[str], error: str, started: float) -> dict:
     return {
         "run_id": run_id,
@@ -207,25 +225,43 @@ def build_failed_result(run_id: str, question: str, session_id: Optional[str], e
     }
 
 
-def run_graph_sync(question: str, run_id: str, session_id: str, user_id: str, chart_type: Optional[str]) -> dict:
+def run_graph_sync(
+    question: str,
+    run_id: str,
+    session_id: str,
+    user_id: str,
+    chart_type: Optional[str],
+    llm_provider: Optional[str],
+    llm_model: Optional[str],
+) -> dict:
     ensure_code_paths()
     bridge_agent_env()
     from graph.sql_graph import graph
+    from services.llm_service import llm_runtime
 
-    return graph.invoke(
-        {
-            "user_question": question,
-            "request_id": run_id,
-            "session_id": session_id,
-            "user_id": user_id,
-            "max_retries": 3,
-            "max_requery_rounds": 1,
-            "chart_type_requested": chart_type or "auto",
-        }
-    )
+    with llm_runtime(provider=llm_provider, model=llm_model):
+        return graph.invoke(
+            {
+                "user_question": question,
+                "request_id": run_id,
+                "session_id": session_id,
+                "user_id": user_id,
+                "max_retries": 3,
+                "max_requery_rounds": 1,
+                "chart_type_requested": chart_type or "auto",
+            }
+        )
 
 
-def normalize_graph_result(state: dict, run_id: str, question: str, session_id: str, started: float) -> dict:
+def normalize_graph_result(
+    state: dict,
+    run_id: str,
+    question: str,
+    session_id: str,
+    started: float,
+    llm_provider: Optional[str],
+    llm_model: Optional[str],
+) -> dict:
     final = state.get("final_answer") or {}
     result = final.get("result") or {}
     rows = json_ready(result.get("rows") or state.get("query_result") or [])
@@ -242,6 +278,8 @@ def normalize_graph_result(state: dict, run_id: str, question: str, session_id: 
         "sql_validation": final.get("sql_validation"),
         "result_validation": (final.get("analysis") or {}).get("result_validation"),
         "missing_info": (final.get("analysis") or {}).get("missing_info"),
+        "llm_provider": llm_provider or os.getenv("AGENT_LLM_PROVIDER", "auto"),
+        "model_used": llm_model,
     }
     missing = trace.get("missing_info") or {}
     created_at = utc_now().isoformat()
@@ -272,7 +310,7 @@ def normalize_graph_result(state: dict, run_id: str, question: str, session_id: 
         "clarification_suggestions": [],
         "assumptions": missing.get("items") or [],
         "retry_count": state.get("retry_count"),
-        "model_used": None,
+        "model_used": llm_model,
         "intent": None,
         "used_tables": [],
         "warnings": [state.get("metadata_warning")] if state.get("metadata_warning") else [],
@@ -377,11 +415,23 @@ async def _execute_question(
     rid = run_id or str(uuid4())
     with db_conn() as conn:
         session = resolve_session(conn, user["id"], session_id)
+    llm_provider, llm_model = resolve_llm_preferences(user)
     try:
-        state = await asyncio.to_thread(run_graph_sync, question, rid, str(session["id"]), str(user["id"]), chart_type)
-        payload = normalize_graph_result(state, rid, question, str(session["id"]), started)
+        state = await asyncio.to_thread(
+            run_graph_sync,
+            question,
+            rid,
+            str(session["id"]),
+            str(user["id"]),
+            chart_type,
+            llm_provider,
+            llm_model,
+        )
+        payload = normalize_graph_result(state, rid, question, str(session["id"]), started, llm_provider, llm_model)
     except Exception as exc:  # noqa: BLE001
         payload = build_failed_result(rid, question, str(session["id"]), f"{exc.__class__.__name__}: {exc}", started)
+        payload["model_used"] = llm_model
+        payload["agent_trace"] = {"llm_provider": llm_provider or os.getenv("AGENT_LLM_PROVIDER", "auto"), "model_used": llm_model}
     with db_conn() as conn:
         session = get_owned_session(conn, user["id"], session["id"]) or session
         try:

@@ -39,7 +39,7 @@ def health(_user: dict = Depends(current_user)) -> dict:
         "trino": snapshot(trino_status, latency_ms=trino_latency, detail=trino_detail),
         "spark": snapshot(spark_status, latency_ms=spark_latency, detail=spark_detail),
         "airflow": snapshot(airflow_status, latency_ms=airflow_latency, detail=airflow_detail),
+        "gemini": snapshot("configured" if (settings.gemini_api_key or settings.gemini_api_keys) else "missing"),
         "groq": snapshot("configured" if settings.groq_api_key else "missing"),
         "checked_at": datetime.now(timezone.utc).isoformat(),
     }
-

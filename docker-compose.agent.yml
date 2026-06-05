@@ -10,6 +10,8 @@ services:
       - ./envs/app.env
       - ./envs/postgre.env
       - ./envs/minio.env
+      - path: ./envs/gemini.env
+        required: false
       - path: ./envs/groq.env
         required: false
     environment:
@@ -32,4 +34,3 @@ networks:
   data_network:
     external: true
     name: data_network
-

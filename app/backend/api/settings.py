@@ -50,10 +50,15 @@ class Settings:
     minio_bucket_gold: str = os.getenv("MINIO_BUCKET_GOLD", "gold")
 
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    gemini_api_keys: str = os.getenv("GEMINI_API_KEYS", "")
+    agent_llm_provider: str = os.getenv("AGENT_LLM_PROVIDER", "auto")
     groq_model_whitelist: str = os.getenv(
         "APP_GROQ_MODEL_WHITELIST",
-        "llama-3.3-70b-versatile,llama-3.1-8b-instant",
+        "gemini-2.5-flash,llama-3.3-70b-versatile,llama-3.1-8b-instant",
     )
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    groq_model: str = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
     allow_temperature_override: bool = _bool_env("APP_ALLOW_TEMPERATURE_OVERRIDE", False)
     agent_engine: str = os.getenv("APP_AGENT_ENGINE", "legacy")
 
@@ -67,7 +72,9 @@ class Settings:
 
     @property
     def model_whitelist_list(self) -> List[str]:
-        return [item.strip() for item in self.groq_model_whitelist.split(",") if item.strip()]
+        models = [self.gemini_model, self.groq_model]
+        models.extend(item.strip() for item in self.groq_model_whitelist.split(",") if item.strip())
+        return list(dict.fromkeys(item for item in models if item))
 
     @property
     def normalized_agent_engine(self) -> str:
@@ -79,7 +86,9 @@ class Settings:
             "trino": "configured" if self.trino_host else "missing",
             "airflow": "configured" if self.airflow_user else "missing",
             "minio": "configured" if self.minio_access_key else "missing",
+            "gemini": "configured" if (self.gemini_api_key or self.gemini_api_keys) else "missing",
             "groq": "configured" if self.groq_api_key else "missing",
+            "llm_provider": self.agent_llm_provider,
             "allow_temperature_override": self.allow_temperature_override,
             "model_whitelist": self.model_whitelist_list,
             "agent_engine": self.normalized_agent_engine,
@@ -98,4 +107,8 @@ def bridge_agent_env() -> None:
     os.environ.setdefault("TRINO_USER", settings.trino_user)
     if settings.groq_api_key:
         os.environ.setdefault("GROQ_API_KEY", settings.groq_api_key)
-
+    if settings.gemini_api_key:
+        os.environ.setdefault("GEMINI_API_KEY", settings.gemini_api_key)
+    if settings.gemini_api_keys:
+        os.environ.setdefault("GEMINI_API_KEYS", settings.gemini_api_keys)
+    os.environ.setdefault("AGENT_LLM_PROVIDER", settings.agent_llm_provider)

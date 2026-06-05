@@ -24,7 +24,7 @@ def load_local_env_files():
     except Exception:
         return
 
-    for file_name in ["endpoint.env", "groq.env", "postgre.env", "iceberg.env"]:
+    for file_name in ["endpoint.env", "gemini.env", "groq.env", "postgre.env", "iceberg.env"]:
         env_file = PROJECT_ROOT / "envs" / file_name
         if env_file.exists():
             load_dotenv(env_file, override=False)
@@ -154,6 +154,8 @@ def health():
         "readonly": True,
         "api_docs": "http://localhost:8001/docs",
         "log_file": str(LOG_FILE),
+        "llm_provider": os.getenv("AGENT_LLM_PROVIDER", "auto"),
+        "gemini_api_key_configured": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEYS")),
         "groq_api_key_configured": bool(os.getenv("GROQ_API_KEY")),
     }
 
