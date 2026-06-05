@@ -4,7 +4,7 @@ services:
       context: ./app/backend
       dockerfile: Dockerfile
     image: agent4da/backend:0.1.0
-    container_name: agent4da
+    container_name: agent4da-gemini
     restart: unless-stopped
     env_file:
       - ./envs/app.env

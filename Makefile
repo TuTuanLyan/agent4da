@@ -3,7 +3,7 @@
 # ==============================
 
 # Docker Compose command for local testing on this machine.
-COMPOSE_CMD ?= docker-compose
+COMPOSE_CMD ?= docker compose
 
 # Danh sách service
 SERVICES := kafka spark minio postgre airflow trino agent frontend monitoring

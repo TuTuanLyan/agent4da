@@ -225,6 +225,71 @@ def build_failed_result(run_id: str, question: str, session_id: Optional[str], e
     }
 
 
+# Number of prior turns from the same session to feed back into the model as
+# follow-up context. Keep small so the prompt stays focused and cheap.
+MAX_CONTEXT_TURNS = int(os.getenv("AGENT_MAX_CONTEXT_TURNS", "4"))
+
+
+def build_app_context_from_runs(conn, session_id: str | UUID, max_turns: int = MAX_CONTEXT_TURNS) -> dict:
+    """Build the compact `app_context` the SQL graph expects from prior turns.
+
+    The live app path persists every turn into app.query_runs, so we can rebuild
+    same-session memory straight from there - no dependency on the agent
+    service's separate Trino->Postgres context store. The shape returned here
+    matches what code/agent/nodes/build_prompt_node.build_app_context consumes.
+    """
+    try:
+        sid = UUID(str(session_id))
+    except (ValueError, TypeError):
+        return {}
+
+    rows = conn.execute(
+        """
+        SELECT question, generated_sql, columns, rows, chart_suggestion,
+               chart_type, status
+        FROM app.query_runs
+        WHERE session_id = %s AND status = 'success'
+        ORDER BY created_at DESC
+        LIMIT %s
+        """,
+        (sid, max(1, int(max_turns))),
+    ).fetchall()
+
+    if not rows:
+        return {}
+
+    # rows came back newest-first; flip to chronological for a natural summary.
+    turns = list(reversed(rows))
+    latest = turns[-1]
+
+    summary_parts: list[str] = []
+    for turn in turns[-3:]:
+        question = (turn.get("question") or "").strip()
+        sql = (turn.get("generated_sql") or "").strip()
+        columns = ", ".join(turn.get("columns") or [])
+        if question:
+            summary_parts.append(f"User asked: {question}")
+        if columns:
+            summary_parts.append(f"Returned columns: {columns}")
+        if sql:
+            summary_parts.append(f"Executed SQL: {sql}")
+
+    sample_rows = json_ready((latest.get("rows") or [])[:3])
+    chart = latest.get("chart_suggestion") or {}
+    if not isinstance(chart, dict):
+        chart = {}
+
+    return {
+        "conversation_summary": "\n".join(summary_parts),
+        "last_question": latest.get("question") or "",
+        "last_sql": latest.get("generated_sql") or "",
+        "last_result_columns": latest.get("columns") or [],
+        "last_result_sample": sample_rows,
+        "last_chart_suggestion": chart,
+        "last_answer_kind": "data" if (latest.get("columns") or sample_rows) else "",
+    }
+
+
 def run_graph_sync(
     question: str,
     run_id: str,
@@ -233,6 +298,7 @@ def run_graph_sync(
     chart_type: Optional[str],
     llm_provider: Optional[str],
     llm_model: Optional[str],
+    app_context: Optional[dict] = None,
 ) -> dict:
     ensure_code_paths()
     bridge_agent_env()
@@ -246,6 +312,7 @@ def run_graph_sync(
                 "request_id": run_id,
                 "session_id": session_id,
                 "user_id": user_id,
+                "app_context": app_context or {},
                 "max_retries": 3,
                 "max_requery_rounds": 1,
                 "chart_type_requested": chart_type or "auto",
@@ -415,7 +482,12 @@ async def _execute_question(
     rid = run_id or str(uuid4())
     with db_conn() as conn:
         session = resolve_session(conn, user["id"], session_id)
+        # Same-session memory: rebuild compact context from this session's prior
+        # turns so the model can resolve follow-up questions that omit the
+        # metric, dimension, filters, or time range.
+        app_context = build_app_context_from_runs(conn, session["id"])
     llm_provider, llm_model = resolve_llm_preferences(user)
+    context_used = bool(app_context.get("last_question") or app_context.get("last_sql"))
     try:
         state = await asyncio.to_thread(
             run_graph_sync,
@@ -426,11 +498,16 @@ async def _execute_question(
             chart_type,
             llm_provider,
             llm_model,
+            app_context,
         )
         payload = normalize_graph_result(state, rid, question, str(session["id"]), started, llm_provider, llm_model)
+        payload["context_used"] = context_used
+        if context_used:
+            payload["resolved_question"] = app_context.get("last_question") or None
     except Exception as exc:  # noqa: BLE001
         payload = build_failed_result(rid, question, str(session["id"]), f"{exc.__class__.__name__}: {exc}", started)
         payload["model_used"] = llm_model
+        payload["context_used"] = context_used
         payload["agent_trace"] = {"llm_provider": llm_provider or os.getenv("AGENT_LLM_PROVIDER", "auto"), "model_used": llm_model}
     with db_conn() as conn:
         session = get_owned_session(conn, user["id"], session["id"]) or session
