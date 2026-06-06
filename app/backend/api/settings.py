@@ -62,6 +62,22 @@ class Settings:
     allow_temperature_override: bool = _bool_env("APP_ALLOW_TEMPERATURE_OVERRIDE", False)
     agent_engine: str = os.getenv("APP_AGENT_ENGINE", "legacy")
 
+    # --- Redis cache + rate limiting (all optional / graceful) ----------------
+    redis_url: str = os.getenv("APP_REDIS_URL", "redis://localhost:6379/0")
+    cache_enabled: bool = _bool_env("APP_CACHE_ENABLED", True)
+    # TTLs (seconds)
+    cache_answer_ttl: int = int(os.getenv("APP_CACHE_ANSWER_TTL", "120"))
+    cache_schema_ttl: int = int(os.getenv("APP_CACHE_SCHEMA_TTL", "600"))
+    cache_session_ttl: int = int(os.getenv("APP_CACHE_SESSION_TTL", "900"))
+    # Don't cache giant result sets (cap rows stored per answer).
+    cache_answer_max_rows: int = int(os.getenv("APP_CACHE_ANSWER_MAX_ROWS", "2000"))
+    # Rate limiting (fixed window; fail-open if Redis is down)
+    rate_limit_enabled: bool = _bool_env("APP_RATE_LIMIT_ENABLED", True)
+    rl_login_limit: int = int(os.getenv("APP_RL_LOGIN_LIMIT", "10"))
+    rl_login_window_s: int = int(os.getenv("APP_RL_LOGIN_WINDOW_S", "60"))
+    rl_ask_limit: int = int(os.getenv("APP_RL_ASK_LIMIT", "30"))
+    rl_ask_window_s: int = int(os.getenv("APP_RL_ASK_WINDOW_S", "60"))
+
     @property
     def psycopg_dsn(self) -> str:
         return self.db_url.replace("postgresql+psycopg://", "postgresql://", 1)

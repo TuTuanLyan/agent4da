@@ -9,9 +9,10 @@ from typing import Any, Optional
 from uuid import UUID, uuid4
 
 import jwt
-from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
+from . import cache
 from .db import db_conn, json_ready
 from .settings import Settings, get_settings
 
@@ -262,8 +263,39 @@ def register(body: RegisterRequest, response: Response, settings: Settings = Dep
         return token_response(conn, response, user, settings)
 
 
+def _client_ip(request: Optional[Request]) -> str:
+    if request is None:
+        return "unknown"
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _enforce_login_rate_limit(request: Request, email: str, settings: Settings) -> None:
+    """Throttle login attempts per IP+email. Fail-open if Redis is down."""
+    if not settings.rate_limit_enabled:
+        return
+    identifier = f"{_client_ip(request)}:{(email or '').strip().lower()}"
+    verdict = cache.rate_limit_check(
+        "login", identifier, settings.rl_login_limit, settings.rl_login_window_s
+    )
+    if not verdict["allowed"]:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please wait a moment and try again.",
+            headers={"Retry-After": str(verdict["retry_after"])},
+        )
+
+
 @router.post("/login")
-def login(body: LoginRequest, response: Response, settings: Settings = Depends(get_settings)) -> dict:
+def login(
+    body: LoginRequest,
+    request: Request,
+    response: Response,
+    settings: Settings = Depends(get_settings),
+) -> dict:
+    _enforce_login_rate_limit(request, body.email, settings)
     with db_conn() as conn:
         user = conn.execute(
             "SELECT * FROM app.users WHERE lower(email) = lower(%s)",

@@ -84,8 +84,10 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/readyz", tags=["meta"])
-    def readyz() -> dict[str, str]:
-        return {"status": "ready"}
+    def readyz() -> dict[str, Any]:
+        from .cache import health as cache_health
+
+        return {"status": "ready", "cache": cache_health()}
 
     app.include_router(auth_router)
     app.include_router(settings_router)

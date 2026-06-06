@@ -1,0 +1,42 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: redis-cache
+    restart: unless-stopped
+
+    # Cache-friendly config: cap memory and evict least-recently-used keys so
+    # Redis never grows unbounded. AOF persistence keeps a warm cache across
+    # restarts (safe to drop - it's only a cache, Postgres is the source of truth).
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+
+    volumes:
+      - redis_data:/data
+
+    networks:
+      - data_network
+
+    ports:
+      - "6379:6379"
+
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+    security_opt:
+      - apparmor=unconfined
+
+volumes:
+  redis_data:
+    driver: local
+
+networks:
+  data_network:
+    external: true
+    name: data_network

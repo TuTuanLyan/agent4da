@@ -6,8 +6,8 @@
 COMPOSE_CMD ?= docker-compose
 
 # Danh sách service
-SERVICES := kafka spark minio postgre airflow trino agent frontend monitoring
-STACK_SERVICES := kafka minio spark airflow trino agent frontend monitoring
+SERVICES := kafka spark minio postgre redis airflow trino agent frontend monitoring
+STACK_SERVICES := kafka minio spark airflow trino redis agent frontend monitoring
 BUILD_SERVICES := airflow agent frontend
 
 # Tên file compose
@@ -15,6 +15,7 @@ COMPOSE_kafka    := docker-compose.kafka.yml
 COMPOSE_spark    := docker-compose.spark.yml
 COMPOSE_minio    := docker-compose.minio.yml
 COMPOSE_postgre := docker-compose.postgre.yml
+COMPOSE_redis    := docker-compose.redis.yml
 COMPOSE_airflow := docker-compose.airflow.yml
 COMPOSE_trino    := docker-compose.trino.yml
 COMPOSE_agent    := docker-compose.agent.yml
@@ -128,6 +129,7 @@ help:
 	@echo "  make spark-up"
 	@echo "  make minio-up"
 	@echo "  make postgre-up"
+	@echo "  make redis-up"
 	@echo "  make airflow-build"
 	@echo "  make airflow-up"
 	@echo "  make agent-build"

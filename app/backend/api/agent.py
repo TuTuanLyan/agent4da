@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from . import cache
 from .auth import current_user
 from .db import db_conn, json_param, json_ready
 from .integrations import ensure_code_paths
@@ -290,6 +291,73 @@ def build_app_context_from_runs(conn, session_id: str | UUID, max_turns: int = M
     }
 
 
+# Bumping the "v1" suffix invalidates a whole cache family at once.
+SCHEMA_CACHE_KEY = cache.make_key("schema_ctx", "v1")
+
+
+def load_session_context(conn, session_id: str | UUID) -> dict:
+    """Same-session follow-up context, served from Redis when warm.
+
+    On a cache miss we rebuild from app.query_runs and store the result. The
+    entry is invalidated by invalidate_session_context() whenever a new turn is
+    persisted, so it never goes stale within a session.
+    """
+    key = cache.make_key("sessctx", "v1", session_id)
+    cached = cache.get_json(key)
+    if cached is not None:
+        return cached
+    ctx = build_app_context_from_runs(conn, session_id)
+    if ctx:
+        cache.set_json(key, ctx, get_settings().cache_session_ttl)
+    return ctx
+
+
+def invalidate_session_context(session_id: str | UUID) -> None:
+    cache.delete(cache.make_key("sessctx", "v1", session_id))
+
+
+def answer_cache_key(
+    user_id: str,
+    session_id: str,
+    question: str,
+    chart_type: Optional[str],
+    llm_model: Optional[str],
+    app_context: Optional[dict],
+) -> str:
+    """A cached answer is only reused for the *same* user, session, question,
+    chart type, model AND conversation context - so a follow-up like
+    'what about February?' can never collide with the same words in another
+    session or after the context has moved on.
+    """
+    fp = cache.fingerprint(
+        (question or "").strip().lower(),
+        chart_type or "auto",
+        llm_model or "",
+        app_context or {},
+    )
+    return cache.make_key("ans", "v1", user_id, session_id, fp)
+
+
+def load_schema_context() -> Optional[dict]:
+    """Cached {schema_context, source, warning} or None on miss."""
+    return cache.get_json(SCHEMA_CACHE_KEY)
+
+
+def store_schema_context(state: dict) -> None:
+    schema_context = state.get("schema_context")
+    if not schema_context:
+        return
+    cache.set_json(
+        SCHEMA_CACHE_KEY,
+        {
+            "schema_context": schema_context,
+            "source": state.get("metadata_source"),
+            "warning": state.get("metadata_warning"),
+        },
+        get_settings().cache_schema_ttl,
+    )
+
+
 def run_graph_sync(
     question: str,
     run_id: str,
@@ -299,25 +367,30 @@ def run_graph_sync(
     llm_provider: Optional[str],
     llm_model: Optional[str],
     app_context: Optional[dict] = None,
+    schema_context: Optional[str] = None,
 ) -> dict:
     ensure_code_paths()
     bridge_agent_env()
     from graph.sql_graph import graph
     from services.llm_service import llm_runtime
 
+    initial_state = {
+        "user_question": question,
+        "request_id": run_id,
+        "session_id": session_id,
+        "user_id": user_id,
+        "app_context": app_context or {},
+        "max_retries": 3,
+        "max_requery_rounds": 1,
+        "chart_type_requested": chart_type or "auto",
+    }
+    # Seeding schema_context lets load_metadata_node short-circuit its Trino
+    # round-trip (see code/agent/nodes/load_metadata_node.py).
+    if schema_context:
+        initial_state["schema_context"] = schema_context
+
     with llm_runtime(provider=llm_provider, model=llm_model):
-        return graph.invoke(
-            {
-                "user_question": question,
-                "request_id": run_id,
-                "session_id": session_id,
-                "user_id": user_id,
-                "app_context": app_context or {},
-                "max_retries": 3,
-                "max_requery_rounds": 1,
-                "chart_type_requested": chart_type or "auto",
-            }
-        )
+        return graph.invoke(initial_state)
 
 
 def normalize_graph_result(
@@ -480,39 +553,75 @@ async def _execute_question(
 ) -> dict:
     started = time.perf_counter()
     rid = run_id or str(uuid4())
+    settings = get_settings()
     with db_conn() as conn:
         session = resolve_session(conn, user["id"], session_id)
-        # Same-session memory: rebuild compact context from this session's prior
-        # turns so the model can resolve follow-up questions that omit the
-        # metric, dimension, filters, or time range.
-        app_context = build_app_context_from_runs(conn, session["id"])
+        sid = str(session["id"])
+        # Same-session memory: served from Redis when warm, otherwise rebuilt
+        # from app.query_runs so the model can resolve follow-up questions that
+        # omit the metric, dimension, filters, or time range.
+        app_context = load_session_context(conn, session["id"])
     llm_provider, llm_model = resolve_llm_preferences(user)
     context_used = bool(app_context.get("last_question") or app_context.get("last_sql"))
-    try:
-        state = await asyncio.to_thread(
-            run_graph_sync,
-            question,
-            rid,
-            str(session["id"]),
-            str(user["id"]),
-            chart_type,
-            llm_provider,
-            llm_model,
-            app_context,
-        )
-        payload = normalize_graph_result(state, rid, question, str(session["id"]), started, llm_provider, llm_model)
-        payload["context_used"] = context_used
-        if context_used:
-            payload["resolved_question"] = app_context.get("last_question") or None
-    except Exception as exc:  # noqa: BLE001
-        payload = build_failed_result(rid, question, str(session["id"]), f"{exc.__class__.__name__}: {exc}", started)
-        payload["model_used"] = llm_model
-        payload["context_used"] = context_used
-        payload["agent_trace"] = {"llm_provider": llm_provider or os.getenv("AGENT_LLM_PROVIDER", "auto"), "model_used": llm_model}
+
+    # 1) Answer cache - identical question, same session + same conversation
+    #    context, same model => return the previous answer without re-running
+    #    the LLM or Trino. (No-op miss if Redis is unavailable.)
+    ans_key = answer_cache_key(str(user["id"]), sid, question, chart_type, llm_model, app_context)
+    cached_answer = cache.get_json(ans_key)
+    if cached_answer:
+        payload = dict(cached_answer)
+        payload.update({
+            "run_id": rid,
+            "session_id": sid,
+            "created_at": utc_now().isoformat(),
+            "latency_ms": round((time.perf_counter() - started) * 1000),
+            "turn_index": None,
+            "cached": True,
+            "context_used": context_used,
+        })
+    else:
+        # 2) Schema/metadata cache - seed schema_context so the graph skips its
+        #    per-request Trino metadata lookup.
+        schema_cached = load_schema_context()
+        schema_context = (schema_cached or {}).get("schema_context")
+        try:
+            state = await asyncio.to_thread(
+                run_graph_sync,
+                question,
+                rid,
+                sid,
+                str(user["id"]),
+                chart_type,
+                llm_provider,
+                llm_model,
+                app_context,
+                schema_context,
+            )
+            payload = normalize_graph_result(state, rid, question, sid, started, llm_provider, llm_model)
+            payload["context_used"] = context_used
+            payload["cached"] = False
+            if context_used:
+                payload["resolved_question"] = app_context.get("last_question") or None
+            if not schema_cached:
+                store_schema_context(state)
+            # 3) Store the answer for reuse (successful + not-too-large only).
+            if payload.get("status") == "success" and int(payload.get("row_count") or 0) <= settings.cache_answer_max_rows:
+                cache.set_json(ans_key, payload, settings.cache_answer_ttl)
+        except Exception as exc:  # noqa: BLE001
+            payload = build_failed_result(rid, question, sid, f"{exc.__class__.__name__}: {exc}", started)
+            payload["model_used"] = llm_model
+            payload["context_used"] = context_used
+            payload["cached"] = False
+            payload["agent_trace"] = {"llm_provider": llm_provider or os.getenv("AGENT_LLM_PROVIDER", "auto"), "model_used": llm_model}
+
     with db_conn() as conn:
         session = get_owned_session(conn, user["id"], session["id"]) or session
         try:
-            return persist_run(conn, user["id"], session, payload)
+            result = persist_run(conn, user["id"], session, payload)
+            # A new turn changes this session's follow-up context.
+            invalidate_session_context(session["id"])
+            return result
         except Exception as exc:  # noqa: BLE001
             payload["status"] = "failed"
             payload["error"] = payload.get("error") or f"Persistence failed: {exc.__class__.__name__}: {exc}"
@@ -564,8 +673,25 @@ def format_run(row: dict, is_favorite: bool = False) -> dict:
     }
 
 
+def enforce_ask_rate_limit(user: dict) -> None:
+    """Throttle agent questions per user. Fail-open if Redis is down."""
+    settings = get_settings()
+    if not settings.rate_limit_enabled:
+        return
+    verdict = cache.rate_limit_check(
+        "ask", str(user["id"]), settings.rl_ask_limit, settings.rl_ask_window_s
+    )
+    if not verdict["allowed"]:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many questions in a short time. Please wait a moment and try again.",
+            headers={"Retry-After": str(verdict["retry_after"])},
+        )
+
+
 @router.post("/ask")
 async def ask(body: AskRequest, user: dict = Depends(current_user)) -> dict:
+    enforce_ask_rate_limit(user)
     return await execute_question(
         question=body.question,
         user=user,
@@ -586,6 +712,8 @@ async def stream_agent(
     session_id: Optional[str] = None,
     user: dict = Depends(current_user),
 ) -> StreamingResponse:
+    enforce_ask_rate_limit(user)
+
     async def events():
         run_id = str(uuid4())
         yield sse("step", {"step": "starting", "status": "running", "run_id": run_id})
