@@ -24,6 +24,7 @@ export interface HealthSnapshot {
   trino: ServiceSnapshot;
   spark: ServiceSnapshot;
   airflow: ServiceSnapshot;
+  gemini: ServiceSnapshot;
   groq: ServiceSnapshot;
   checked_at: string;
 }
@@ -35,6 +36,7 @@ const PLACEHOLDER: HealthSnapshot = {
   trino: UNKNOWN,
   spark: UNKNOWN,
   airflow: UNKNOWN,
+  gemini: UNKNOWN,
   groq: UNKNOWN,
   checked_at: new Date(0).toISOString(),
 };

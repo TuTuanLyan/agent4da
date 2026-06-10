@@ -84,7 +84,7 @@ services:
       - "--path.rootfs=/host"
     pid: host
     volumes:
-      - /:/host:ro,rslave
+      - /:/host:ro
     networks:
       - data_network
     # No host port: scraped internally as node-exporter:9100

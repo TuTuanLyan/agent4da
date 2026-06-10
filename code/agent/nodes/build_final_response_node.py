@@ -173,6 +173,10 @@ def build_final_response_node(state):
             "insight_error": insight_error,
             "result_profile": profile,
             "result_validation": make_json_ready(state.get("result_validation") or {}),
+            "entity_resolution": {
+                "resolved_entities": make_json_ready(state.get("resolved_entities") or []),
+                "warning": state.get("entity_resolution_warning"),
+            },
             "missing_info": missing_info
         },
         "chart_suggestion": chart_suggestion,

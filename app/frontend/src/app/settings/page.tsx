@@ -25,7 +25,9 @@ interface SystemStatus {
   trino: SystemConfigured;
   airflow: SystemConfigured;
   minio: SystemConfigured;
+  gemini: SystemConfigured;
   groq: SystemConfigured;
+  llm_provider: string;
   allow_temperature_override: boolean;
   model_whitelist: string[];
   agent_engine: "legacy" | "v2";
@@ -57,6 +59,15 @@ const DELIMITERS = [
   { label: "Tab", value: "\t" },
 ];
 
+type ModelProvider = "auto" | "gemini" | "groq";
+
+function providerForModel(model: string | null | undefined): ModelProvider {
+  if (!model) return "auto";
+  const normalized = model.toLowerCase();
+  if (normalized.startsWith("gemini-")) return "gemini";
+  return "groq";
+}
+
 export default function SettingsPage() {
   const { prefs, hydrated, setPrefs } = usePrefs();
   const { data: health, loading: healthLoading, refresh: refreshHealth } = useHealth();
@@ -84,13 +95,28 @@ export default function SettingsPage() {
   }, [loadSystem]);
 
   const modelOptions = useMemo(() => system?.model_whitelist ?? [], [system]);
+  const geminiModels = useMemo(
+    () => modelOptions.filter((model) => model.toLowerCase().startsWith("gemini-")),
+    [modelOptions],
+  );
+  const groqModels = useMemo(
+    () => modelOptions.filter((model) => !model.toLowerCase().startsWith("gemini-")),
+    [modelOptions],
+  );
   const effectivePrefs = prefs ?? {
     theme: "system",
     default_chart_type: "auto",
-    default_model: modelOptions[0] ?? null,
+    default_model: null,
     preferred_language: "vi",
     export_delimiter: ",",
   };
+  const selectedProvider = providerForModel(effectivePrefs.default_model);
+  const filteredModelOptions =
+    selectedProvider === "gemini"
+      ? geminiModels
+      : selectedProvider === "groq"
+        ? groqModels
+        : modelOptions;
 
   const updatePrefs = useCallback(
     async (key: string, patch: Partial<AuthUserPreferences>) => {
@@ -200,24 +226,59 @@ export default function SettingsPage() {
 
       <SettingsSection
         title="Model & Agent"
-        description="The provider is locked to Groq for V1. Temperature stays fixed at 0 unless the backend enables overrides. The agent engine is controlled by backend env."
+        description="The backend can use Gemini, Groq, or auto fallback. Temperature stays fixed at 0 unless the backend enables overrides."
       >
         <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          <ReadOnlyField icon={Bot} label="Provider" value="Groq" />
+          <label className="flex flex-col gap-1 rounded-lg border border-border bg-elevated p-3">
+            <span className="flex items-center gap-2 text-xs font-medium text-text-secondary">
+              <Bot className="h-4 w-4 text-accent" aria-hidden="true" />
+              Provider
+            </span>
+            <select
+              value={selectedProvider}
+              disabled={!hydrated || savingKey === "provider"}
+              onChange={(event) => {
+                const provider = event.target.value as ModelProvider;
+                const nextModel =
+                  provider === "gemini"
+                    ? geminiModels[0] ?? null
+                    : provider === "groq"
+                      ? groqModels[0] ?? null
+                      : null;
+                void updatePrefs("provider", { default_model: nextModel });
+              }}
+              className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text-primary focus:border-accent focus:outline-none"
+            >
+              <option value="auto">Auto fallback</option>
+              <option value="gemini" disabled={geminiModels.length === 0}>
+                Gemini
+              </option>
+              <option value="groq" disabled={groqModels.length === 0}>
+                Groq
+              </option>
+            </select>
+          </label>
           <label className="flex flex-col gap-1 rounded-lg border border-border bg-elevated p-3">
             <span className="text-xs font-medium text-text-secondary">Default model</span>
             <select
-              value={effectivePrefs.default_model ?? modelOptions[0] ?? ""}
-              disabled={!hydrated || modelOptions.length === 0 || savingKey === "model"}
+              value={effectivePrefs.default_model ?? ""}
+              disabled={
+                !hydrated ||
+                selectedProvider === "auto" ||
+                filteredModelOptions.length === 0 ||
+                savingKey === "model"
+              }
               onChange={(event) =>
                 void updatePrefs("model", { default_model: event.target.value || null })
               }
               className="rounded-md border border-border bg-surface px-2 py-1.5 text-sm text-text-primary focus:border-accent focus:outline-none"
             >
-              {modelOptions.length === 0 ? (
+              {selectedProvider === "auto" ? (
+                <option value="">Gemini first, Groq fallback</option>
+              ) : filteredModelOptions.length === 0 ? (
                 <option value="">No models configured</option>
               ) : (
-                modelOptions.map((model) => (
+                filteredModelOptions.map((model) => (
                   <option key={model} value={model}>
                     {model}
                   </option>
@@ -273,6 +334,11 @@ export default function SettingsPage() {
             label="MinIO"
             configured={system?.minio}
             snapshot={null}
+          />
+          <ConnectionRow
+            label="Gemini"
+            configured={system?.gemini}
+            snapshot={health.gemini}
           />
           <ConnectionRow
             label="Groq"

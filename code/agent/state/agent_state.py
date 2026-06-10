@@ -22,6 +22,10 @@ class AgentState(TypedDict, total=False):
 
     metadata_warning: Optional[str]
 
+    resolved_entities: Optional[list]
+
+    entity_resolution_warning: Optional[str]
+
     prompt: str
 
     generated_sql: str

@@ -22,6 +22,10 @@ Rules:
 - Do not add extra GROUP BY dimensions unless the user explicitly asks for ranking by those dimensions.
 - If the user asks for top brand plus its top category/product, first aggregate total metric by brand, then use a CTE with ROW_NUMBER() OVER (PARTITION BY brand ORDER BY metric DESC) to select the top related category/product per brand.
 - Treat brand value 'unknown' as missing/unknown brand, not a real brand. Display it as 'Không rõ' or exclude it when the user asks for real/notable brands.
+- Trino string comparisons are case-sensitive. Gold text dimension values such as brand/category are normalized lowercase.
+- When filtering user-provided text dimension values such as brand, category_l1, category_l2, category_l3, or event_type, compare case-insensitively with lower(trim(column)) = lower(trim('value')). For exclusions, use lower(trim(column)) <> lower(trim('value')).
+- Keep SELECT and GROUP BY display columns unchanged; use lower(trim(...)) only in WHERE/JOIN predicates for matching user-provided text values.
+- If ENTITY RESOLUTION provides a resolved value for a user typo or casing variant, use the resolved_value/sql_predicate for the matching filter instead of the raw user text.
 - If the user question is a follow-up, use APP CONTEXT to resolve omitted metric, dimension, filters, time range, and previous SQL intent.
 - If the user asks to draw or change a chart only, re-run a SQL query that returns the same analytical data from the previous context.
 - If the user asks to exclude a brand/category/product mentioned in the follow-up, add the exclusion filter to the new SQL.
@@ -66,6 +70,33 @@ def build_app_context(state):
     return json.dumps(compact_context, ensure_ascii=False, default=str, indent=2)
 
 
+def build_entity_context(state):
+    resolved_entities = state.get("resolved_entities") or []
+    warning = state.get("entity_resolution_warning")
+
+    if not resolved_entities:
+        if warning:
+            return f"No resolved entity values. Resolver warning: {warning}"
+        return "No resolved entity values."
+
+    return json.dumps(
+        [
+            {
+                "dimension": entity.get("dimension"),
+                "input": entity.get("input"),
+                "resolved_value": entity.get("resolved_value"),
+                "confidence": entity.get("confidence"),
+                "match_type": entity.get("match_type"),
+                "sql_predicate": entity.get("sql_predicate"),
+            }
+            for entity in resolved_entities
+        ],
+        ensure_ascii=False,
+        default=str,
+        indent=2,
+    )
+
+
 def build_requery_context(state):
     validation = state.get("result_validation") or {}
     if not validation.get("can_requery"):
@@ -78,7 +109,7 @@ PREVIOUS SQL RAN BUT RESULT WAS INCOMPLETE:
 RESULT VALIDATION:
 {json.dumps(validation, ensure_ascii=False, default=str, indent=2)}
 
-Regenerate SQL using the same schema context and app context. Include the missing fields when they exist in the Gold metadata. Return only corrected SQL.
+Regenerate SQL using the same schema context and app context. Include the missing fields when they exist in the Gold metadata. If the previous SQL returned no rows because it used direct case-sensitive text filters such as brand = 'Samsung', rewrite those filters with lower(trim(column)) = lower(trim('value')). Return only corrected SQL.
 """.strip()
 
 
@@ -93,6 +124,9 @@ SCHEMA CONTEXT:
 
 APP CONTEXT:
 {build_app_context(state)}
+
+ENTITY RESOLUTION:
+{build_entity_context(state)}
 
 USER QUESTION:
 {state["user_question"]}

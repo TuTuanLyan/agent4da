@@ -5,6 +5,7 @@ from state.agent_state import AgentState
 from nodes.guard_question_node import guard_question_node
 from nodes.load_metadata_node import load_metadata_node
 from nodes.check_answerability_node import check_answerability_node
+from nodes.resolve_entities_node import resolve_entities_node
 from nodes.build_prompt_node import build_prompt_node
 from nodes.text2sql_node import generate_sql_node
 from nodes.guard_sql_node import guard_sql_node
@@ -43,7 +44,7 @@ def route_after_execute(state):
 def route_after_answerability(state):
     if state.get("stop_after_answerability"):
         return "build_final_response"
-    return "build_prompt"
+    return "resolve_entities"
 
 
 def route_after_result_validation(state):
@@ -59,6 +60,8 @@ builder.add_node("guard_question", guard_question_node)
 builder.add_node("load_metadata", load_metadata_node)
 
 builder.add_node("check_answerability", check_answerability_node)
+
+builder.add_node("resolve_entities", resolve_entities_node)
 
 builder.add_node("build_prompt", build_prompt_node)
 
@@ -96,10 +99,12 @@ builder.add_conditional_edges(
     "check_answerability",
     route_after_answerability,
     {
-        "build_prompt": "build_prompt",
+        "resolve_entities": "resolve_entities",
         "build_final_response": "build_final_response",
     },
 )
+
+builder.add_edge("resolve_entities", "build_prompt")
 
 builder.add_edge("build_prompt", "generate_sql")
 builder.add_edge("generate_sql", "guard_sql")

@@ -1,4 +1,11 @@
+import re
 import unicodedata
+
+
+DIRECT_TEXT_FILTER_RE = re.compile(
+    r"\b(brand|category_l1|category_l2|category_l3|event_type)\b\s*(=|<>|!=)\s*'([^']+)'",
+    re.IGNORECASE,
+)
 
 
 def normalize_text(text):
@@ -18,6 +25,21 @@ def column_matches(columns, candidates):
             if normalized_candidate in column:
                 return True
     return False
+
+
+def direct_text_filters_needing_normalization(sql):
+    filters = []
+    for column_name, operator, value in DIRECT_TEXT_FILTER_RE.findall(sql or ""):
+        stripped_value = value.strip()
+        if stripped_value != stripped_value.lower() or stripped_value != value:
+            filters.append(
+                {
+                    "column": column_name,
+                    "operator": operator,
+                    "value": value,
+                }
+            )
+    return filters
 
 
 def expected_fields(question):
@@ -71,6 +93,27 @@ def validate_result_node(state):
     columns = profile.get("columns") or (list(rows[0].keys()) if rows else [])
 
     if not rows:
+        suspect_filters = direct_text_filters_needing_normalization(state.get("generated_sql") or "")
+        requery_count = int(state.get("requery_count") or 0)
+        max_requery_rounds = int(state.get("max_requery_rounds") or 1)
+        can_requery = bool(suspect_filters) and requery_count < max_requery_rounds
+
+        if can_requery:
+            return {
+                "result_validation": {
+                    "valid": False,
+                    "can_requery": True,
+                    "missing_fields": [],
+                    "suspect_filters": suspect_filters,
+                    "notes": (
+                        "Query returned no rows and used direct case-sensitive text filters. "
+                        "Rewrite user-provided text filters with lower(trim(column)) comparisons."
+                    ),
+                },
+                "requery_requested": True,
+                "requery_count": requery_count + 1,
+            }
+
         return {
             "result_validation": {
                 "valid": True,
