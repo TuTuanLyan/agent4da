@@ -89,3 +89,31 @@ APP_AGENT_ENGINE=v2
 - `envs/spark.env`: Spark submit defaults.
 - `envs/groq.env`: optional LLM/API key for agent experiments.
 - `envs/app.env`: FastAPI backend auth, database URL, CORS, and service URLs.
+
+## PostgreSQL Init And Auth Schema
+
+`docker-compose.airflow.yml` va `docker-compose.postgre.yml` mount `./init`
+vao `/docker-entrypoint-initdb.d:ro`. Postgres chay cac script trong `init/`
+theo thu tu alphabet, nhung chi tu dong chay khi volume du lieu duoc tao lan
+dau.
+
+- `init/01_init_schemas.sh`: tao cac schema nen nhu `airflow`, `iceberg`,
+  `bronze_meta`, `silver_meta` va role DB cho Airflow.
+- `init/02_app_auth.sql`: tao `app.users`, `app.refresh_tokens` va
+  `app.user_preferences` cho FastAPI auth, kem unique index tren
+  `lower(email)`.
+
+Neu `postgres_data` da ton tai tren server, Docker se khong tu chay lai cac
+script init. Chay migration auth thu cong:
+
+```bash
+docker exec -i postgres-db psql -U bigdata -d agent4da < init/02_app_auth.sql
+```
+
+Co the recreate volume de init lai tu dau, nhung cach nay se xoa du lieu trong
+volume Postgres hien tai:
+
+```bash
+docker compose -f docker-compose.airflow.yml down -v
+docker compose -f docker-compose.airflow.yml up -d postgres
+```

@@ -68,6 +68,9 @@ def init_db() -> None:
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_app_users_email_lower
+      ON app.users (lower(email));
+
     CREATE TABLE IF NOT EXISTS app.refresh_tokens (
       jti TEXT PRIMARY KEY,
       user_id UUID NOT NULL REFERENCES app.users(id) ON DELETE CASCADE,
@@ -75,6 +78,12 @@ def init_db() -> None:
       revoked_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    CREATE INDEX IF NOT EXISTS ix_app_refresh_tokens_user_created
+      ON app.refresh_tokens(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS ix_app_refresh_tokens_active_expires
+      ON app.refresh_tokens(expires_at)
+      WHERE revoked_at IS NULL;
 
     CREATE TABLE IF NOT EXISTS app.user_preferences (
       user_id UUID PRIMARY KEY REFERENCES app.users(id) ON DELETE CASCADE,
