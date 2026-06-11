@@ -19,7 +19,7 @@ groups:
         labels: { severity: critical }
         annotations:
           summary: "FastAPI / AI Agent backend is down"
-          description: "Prometheus cannot scrape agent4da:8000/metrics for >1m."
+          description: "Prometheus cannot scrape agent4da-gemini:8000/metrics for >1m."
 
       - alert: PostgresDown
         # pg_up comes from postgres-exporter; falls back to scrape target down.

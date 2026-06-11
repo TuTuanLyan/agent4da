@@ -36,13 +36,13 @@ scrape_configs:
           service: prometheus
 
   # --- FastAPI / AI Agent backend --------------------------------------------
-  # Container name "agent4da", internal port 8000, exposes GET /metrics.
+  # Container name "agent4da-gemini", internal port 8000, exposes GET /metrics.
   # This single target carries HTTP, /ask agent, ETL pipeline, Trino-from-agent
   # and SQL-generation metrics (all registered in one process).
   - job_name: agent-backend
     metrics_path: /metrics
     static_configs:
-      - targets: ["agent4da:8000"]
+      - targets: ["agent4da-gemini:8000"]
         labels:
           service: agent-backend
 

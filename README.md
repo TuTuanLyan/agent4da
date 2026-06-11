@@ -1,846 +1,615 @@
-# Agent4DA
+# Agent4DA - Data Engineering & AI Analytics Agent
 
-Agent4DA la project data engineering + AI analytics agent cho du lieu ecommerce.
-Muc tieu cua project la demo mot pipeline du lieu phan tan theo Medallion
-Architecture:
+## 1. Tổng quan dự án
+
+Agent4DA là một hệ thống xử lý dữ liệu và phân tích thông minh cho dữ liệu
+e-commerce. Dự án mô phỏng một nền tảng dữ liệu hiện đại theo kiến trúc
+Medallion Architecture, gồm các tầng Bronze, Silver và Gold, sau đó sử dụng
+Trino và AI Agent để người dùng có thể đặt câu hỏi bằng ngôn ngữ tự nhiên và
+nhận lại SQL, bảng kết quả, biểu đồ và phần diễn giải.
+
+Mục tiêu của dự án không chỉ là xây dựng một pipeline ETL, mà là hoàn thiện một
+luồng end-to-end:
+
+- Thu thập dữ liệu sự kiện thương mại điện tử từ CSV vào Kafka.
+- Xử lý dữ liệu bằng Spark và lưu trên MinIO theo từng tầng dữ liệu.
+- Chuẩn hóa dữ liệu, kiểm tra chất lượng và loại bỏ trùng lặp.
+- Xây dựng Gold layer bằng Apache Iceberg để phục vụ truy vấn phân tích.
+- Truy vấn dữ liệu qua Trino.
+- Xây dựng FastAPI backend và Next.js frontend cho dashboard, catalog, lịch sử
+  truy vấn và AI Agent.
+- Giám sát hệ thống bằng Prometheus và Grafana.
+
+Về tổng thể, Agent4DA là một project lakehouse local có đủ các phần chính của
+một hệ thống data platform: ingestion, storage, processing, orchestration,
+query engine, semantic metadata, AI analytics application và observability.
+
+## 2. Kiến trúc hệ thống
+
+Luồng dữ liệu tổng quát:
 
 ```text
-CSV/sample data
-  -> Kafka topic ecommerce_events
-  -> Spark Bronze job
-  -> MinIO bronze Parquet
-  -> Spark Silver job
-  -> MinIO silver Parquet
-  -> Spark Gold jobs
-  -> Iceberg Gold tables tren MinIO + PostgreSQL JDBC catalog
-  -> Trino
-  -> FastAPI/LangGraph Agent Text-to-SQL
+CSV sample data
+   -> Kafka topic ecommerce_events
+   -> Spark Bronze job
+   -> MinIO bronze Parquet
+   -> Spark Silver job
+   -> MinIO silver Parquet
+   -> Spark Gold jobs
+   -> Apache Iceberg Gold tables on MinIO
+   -> PostgreSQL JDBC catalog metadata
+   -> Trino SQL engine
+   -> FastAPI + LangGraph AI Agent
+   -> Next.js Analytics Console
 ```
 
-README nay ghi lai tinh trang repo hien tai, doc tu source code va docs tai
-ngay 2026-06-01. Muc dich la lam tai lieu tong quan de tiep tuc hoi/len ke
-hoach deploy len Google Cloud Platform voi ngan sach Free Trial khoang $300.
-
-## 1. Tinh trang hien tai
-
-### Da co
-
-- Docker Compose stack cho Kafka, Spark standalone, MinIO, PostgreSQL, Airflow,
-  Trino, Agent backend va Frontend UI.
-- Spark standalone dang tach `spark-master` va `spark-worker` thanh cac
-  container rieng.
-- Bronze batch job doc Kafka theo offset da luu tren MinIO, parse JSON va ghi
-  Parquet vao bucket `bronze`.
-- Silver batch job doc Bronze Parquet, normalize schema, validate data quality,
-  deduplicate theo `event_fingerprint`, tach valid/invalid va ghi Parquet vao
-  bucket `silver`.
-- Gold pipeline moi da duoc refactor thanh cac task doc lap:
-  - `gold_prepare_events`
-  - `gold_build_facts`
-  - `gold_build_dimensions`
-  - `gold_build_daily_event_summary`
-  - `gold_build_daily_product_summary`
-  - `gold_build_daily_category_summary`
-  - `gold_build_daily_brand_summary`
-- Gold tables dung Apache Iceberg tren MinIO. PostgreSQL duoc dung lam JDBC
-  catalog metadata cho Iceberg, khong luu row data that cua Gold.
-- Trino co connector Iceberg va PostgreSQL, duoc expose local port `8082`.
-- Agent FastAPI da co API doc tai `/docs`, co LangGraph flow Text-to-SQL,
-  doc metadata, guard question, guard SQL, query Trino, profile result, plan
-  chart va sinh insight.
-- Agent co fallback metadata tinh tu `code/spark/gold/metadata_definitions.py`
-  neu chua doc duoc metadata tables tu Trino.
-- Frontend Next.js da duoc dong goi bang `app/frontend/Dockerfile` va
-  `docker-compose.frontend.yml`, expose local port `3000`.
-
-### Chua hoan thien hoac can kiem tra ky
-
-- `docker-compose.spark.yml` hien chi co 1 service worker ten `spark-worker`.
-  Vi co `container_name: spark-worker`, chua scale truc tiep len 2 worker bang
-  `docker compose --scale spark-worker=2`. Muon demo 1 master + 2 worker can
-  sua compose thanh `spark-worker-1` va `spark-worker-2`, hoac bo
-  `container_name` de scale.
-- Backend FastAPI cho frontend da co trong `app/backend` va chay bang
-  `docker-compose.agent.yml`; engine LangGraph van tai su dung `code/agent`.
-- Metadata docs dang co diem lech voi code moi. File
-  `docs/GOLD_METADATA_PIPELINE.md` con nhac cac bang
-  `table_catalog`, `column_catalog`, `metric_catalog`, `join_catalog`, nhung
-  code hien tai trong `code/spark/gold/config.py` va
-  `code/spark/gold/metadata.py` build 2 bang:
-  `semantic_table_catalog` va `semantic_column_catalog`. Agent cung dang query
-  `iceberg.metadata.semantic_table_catalog` va
-  `iceberg.metadata.semantic_column_catalog`.
-- Gold metadata moi mo ta table/column cho Agent. Metric catalog va join catalog
-  chua thay trong code runtime hien tai.
-- Gold refresh mode hien tai la `full_refresh`; incremental/MERGE chua
-  implement.
-- `Makefile all-up` dung `docker-compose.airflow.yml` lam PostgreSQL shared
-  stack, nen khong start `docker-compose.postgre.yml` rieng trong luong all-up.
-  `make all-up` va `make all-down` chay chung toan bo compose file cua stack
-  de UI/backend/data services duoc up/down cung mot project Docker Compose.
-- `envs/`, `jars/`, `data/`, `log/` dang bi gitignore. Khi deploy sang may
-  khac phai copy/generate lai cac file nay.
-- Kafka compose dang advertise listener ngoai la `localhost:9092`; dung tot khi
-  producer chay tren chinh VM/host, nhung neu producer tu may ngoai thi can doi
-  sang external IP/DNS hoac dung SSH tunnel.
-
-## 2. Kien truc service hien tai
+Sơ đồ logic của hệ thống:
 
 ```text
 +------------------+       +--------------------+
-| CSV producer     | ----> | Kafka KRaft        |
-| code/kafka       |       | topic ecommerce    |
+| CSV Producer     | ----> | Kafka KRaft        |
+| code/kafka       |       | ecommerce_events   |
 +------------------+       +---------+----------+
                                       |
                                       v
 +------------------+       +--------------------+       +------------------+
-| Airflow DAGs     | ----> | Spark standalone   | ----> | MinIO S3 buckets|
-| scheduler/UI     |       | master + worker(s) |       | bronze/silver/  |
-+------------------+       +---------+----------+       | gold            |
+| Airflow DAGs     | ----> | Spark Standalone   | ----> | MinIO Buckets    |
+| Orchestration    |       | master + worker    |       | bronze/silver/   |
++------------------+       +---------+----------+       | gold             |
                                       |                  +--------+---------+
                                       v                           |
                             +--------------------+                |
-                            | Iceberg tables     | <--------------+
-                            | Gold layer         |
+                            | Iceberg Gold       | <--------------+
+                            | tables             |
                             +---------+----------+
                                       |
                                       v
                             +--------------------+       +------------------+
                             | PostgreSQL         |       | Trino            |
-                            | Iceberg catalog    | <---- | SQL engine       |
+                            | App DB + Catalog   | <---- | SQL Engine       |
                             +--------------------+       +--------+---------+
                                                                   |
                                                                   v
                                                         +------------------+
-                                                        | FastAPI Agent    |
-                                                        | LangGraph SQL    |
+                                                        | FastAPI Backend  |
+                                                        | LangGraph Agent  |
                                                         +--------+---------+
                                                                  |
                                                                  v
                                                         +------------------+
                                                         | Next.js UI       |
-                                                        | localhost:3000   |
+                                                        | Analytics App    |
                                                         +------------------+
 ```
 
-## 3. Thu muc chinh
+![Sơ đồ kiến trúc tổng thể Agent4DA](imgs/architecture.png)
 
-- `code/kafka/`: CSV producer va helper/tai lieu Kafka.
-- `code/spark/bronze_job.py`: Spark Bronze batch job.
-- `code/spark/silver_job.py`: Spark Silver batch job.
-- `code/spark/gold/`: Gold layer modules, DDL, validators, readers/writers,
-  metadata definitions va Spark task entrypoints.
-- `code/airflow/dags/`: DAGs cho Bronze, Silver, Gold va Gold metadata.
-- `code/agent/`: FastAPI + LangGraph Agent Text-to-SQL.
-- `app/backend/`: FastAPI backend phuc vu UI va goi engine trong `code/agent`.
-- `app/frontend/`: Next.js Analytics Console, dong goi Docker port `3000`.
-- `trino/`: Trino config va entrypoint generate catalog properties tu env.
-- `dockerfile/`: Dockerfile Airflow va entrypoint.
-- `script/`: helper script submit Spark job va thao tac Kafka.
-- `notebook/`: notebook xem/debug data.
-- `docs/`: tai lieu chi tiet tung phan. Mot so file co the lech nhe voi code
-  moi, nen uu tien source code khi co conflict.
-- `envs/`: local env files, bi gitignore.
-- `jars/`: local Spark/Iceberg/Hadoop/Kafka/PostgreSQL jars, bi gitignore.
-- `data/`: sample CSV, bi gitignore.
+Hệ thống được tách thành ba nhóm chính:
 
-## 4. Docker services va ports
+**Data Platform**
 
-| Service | Compose file | Port host | Ghi chu |
-| --- | --- | --- | --- |
-| Kafka KRaft | `docker-compose.kafka.yml` | `9092` | 1 broker/controller, topic auto-create, 3 partitions mac dinh |
-| Spark master | `docker-compose.spark.yml` | `8080`, `7077`, `4040` | Spark UI, master URL `spark://spark-master:7077` |
-| Spark worker | `docker-compose.spark.yml` | none | Hien chi 1 worker, 2 cores, 2 GB memory |
-| MinIO | `docker-compose.minio.yml` | `9000`, `9001` | S3 API va console UI |
-| PostgreSQL | `docker-compose.airflow.yml` hoac `docker-compose.postgre.yml` | `5432` | Airflow metadata + Iceberg JDBC catalog schemas |
-| Airflow | `docker-compose.airflow.yml` | `8081`, `8793` | LocalExecutor, SparkSubmitOperator |
-| Trino | `docker-compose.trino.yml` | `8082` | Query Iceberg/Postgres |
-| Agent backend | `docker-compose.agent.yml` | `8083` | FastAPI backend container `agent4da`, phuc vu frontend |
-| Frontend UI | `docker-compose.frontend.yml` | `3000` | Next.js production UI container `agent4da-ui` |
+- Kafka tiếp nhận dữ liệu sự kiện.
+- Spark xử lý dữ liệu ở các tầng Bronze, Silver, Gold.
+- MinIO đóng vai trò object storage tương thích S3.
+- Apache Iceberg quản lý Gold tables.
+- PostgreSQL lưu Iceberg catalog metadata và dữ liệu ứng dụng.
+- Trino phục vụ truy vấn SQL tốc độ cao trên Gold layer.
 
-Tat ca compose file dang dung external Docker network:
+**Application & AI Agent**
 
-```bash
-docker network create data_network
-```
+- FastAPI backend cung cấp API cho frontend, auth, history, catalog, metrics và
+  tích hợp Agent.
+- LangGraph Agent chuyển câu hỏi tự nhiên thành SQL an toàn, truy vấn Trino và
+  sinh câu trả lời.
+- Next.js frontend cung cấp giao diện Dashboard, Ask, History, Catalog,
+  Pipelines và Settings.
 
-## 5. Data pipeline
+**Monitoring & Observability**
 
-### 5.1 Kafka ingest
+- Prometheus scrape metrics từ backend, Trino, PostgreSQL và exporters.
+- Grafana hiển thị dashboard hệ thống, pipeline và hiệu năng AI Agent.
 
-- Producer: `code/kafka/producer.py`.
-- Input sample hien co trong repo local: `data/event_test.csv` va
-  `data/event_test_1000.csv`.
-- Topic mac dinh: `ecommerce_events`.
-- Kafka container: `kafka-kraft`.
-- Kafka internal bootstrap cho container: `kafka-kraft:29092`.
-- Kafka external bootstrap tren host: `localhost:9092`.
+## 3. Các công nghệ sử dụng chính
 
-Producer doc CSV, convert tung row thanh JSON va gui vao Kafka.
+### Data Engineering & Lakehouse
 
-### 5.2 Bronze
+* **Apache Kafka**: Message broker nhận dữ liệu sự kiện e-commerce từ CSV
+  producer. Project dùng Kafka KRaft, không cần Zookeeper.
+* **Apache Spark**: Engine xử lý dữ liệu phân tán. Spark được dùng cho Bronze,
+  Silver và Gold jobs.
+* **Apache Airflow**: Điều phối pipeline bằng DAGs. Bronze và Silver chạy định
+  kỳ, Gold và Gold Metadata chạy manual khi cần build lại layer phục vụ phân
+  tích.
+* **MinIO**: Object storage local, tương thích S3. Dữ liệu được lưu theo các
+  bucket `bronze`, `silver`, `gold`.
+* **Apache Iceberg**: Table format cho Gold layer, giúp dữ liệu Gold có schema,
+  metadata và có thể query bằng Trino.
+* **PostgreSQL**: Lưu Iceberg JDBC catalog metadata, Airflow metadata và dữ
+  liệu ứng dụng như users, sessions, query history.
+* **Trino**: Distributed SQL query engine, dùng để truy vấn các bảng Iceberg
+  trong Gold layer.
 
-Entry point:
+### Backend, Frontend & AI
 
-```text
-code/spark/bronze_job.py
-code/airflow/dags/bronze_pipeline.py
-```
+* **FastAPI**: Backend API cho Analytics Console, authentication, catalog,
+  history, settings, pipeline control và Agent execution.
+* **LangGraph**: Xây dựng luồng AI Agent gồm guard question, load metadata,
+  generate SQL, validate SQL, execute SQL, validate result, plan chart và tạo
+  insight.
+* **Gemini / Groq**: LLM providers cho Text-to-SQL và diễn giải kết quả. Backend
+  hỗ trợ chọn provider/model trong settings.
+* **Next.js + React + TailwindCSS**: Frontend application cho người dùng cuối.
+* **Recharts**: Hiển thị biểu đồ trong dashboard và kết quả Agent.
 
-Logic chinh:
+### Monitoring
 
-- Doc Kafka batch voi `startingOffsets` lay tu file offset tren MinIO.
-- Parse JSON theo schema ecommerce dang string.
-- Them Kafka metadata: `kafka_ts`, `kafka_partition`, `kafka_offset`.
-- Them `ingested_at` va `date_partition`.
-- Ghi Parquet append vao:
+* **Prometheus**: Thu thập metrics HTTP, AI Agent, ETL pipeline, Trino,
+  PostgreSQL, host và container.
+* **Grafana**: Trực quan hóa metrics bằng các dashboard đã provision sẵn.
+* **node-exporter, cAdvisor, postgres-exporter**: Export metrics hệ thống,
+  container và PostgreSQL.
 
-```text
-s3a://bronze/ecommerce_events/
-```
+## 4. Chức năng chính của hệ thống
 
-- Luu offset tiep theo vao:
+### 4.1. Data Pipeline
 
-```text
-s3a://bronze/_offsets/ecommerce_events.json
-```
+Pipeline dữ liệu đi qua ba tầng:
 
-Airflow schedule:
+**Bronze**
 
-```text
-*/10 * * * *
-```
+- Đọc message mới từ Kafka topic `ecommerce_events`.
+- Parse JSON theo schema e-commerce.
+- Thêm Kafka metadata như partition, offset và timestamp.
+- Ghi Parquet vào `s3a://bronze/ecommerce_events/`.
+- Lưu offset trên MinIO để lần chạy sau không đọc lại dữ liệu cũ.
 
-`max_active_runs=1` de tranh race condition tren offset file.
+**Silver**
 
-### 5.3 Silver
+- Đọc dữ liệu Bronze.
+- Chuẩn hóa kiểu dữ liệu timestamp, số, decimal.
+- Tách category hierarchy thành `category_l1`, `category_l2`, `category_l3`.
+- Validate bản ghi và tách valid/invalid outputs.
+- Deduplicate bằng `event_fingerprint`.
+- Ghi dữ liệu sạch vào `s3a://silver/ecommerce_events/`.
 
-Entry point:
+**Gold**
 
-```text
-code/spark/silver_job.py
-code/airflow/dags/silver_pipeline.py
-```
+- Đọc Silver clean events.
+- Build staging, fact tables, dimension tables và summary tables.
+- Ghi Gold tables bằng Apache Iceberg.
+- Các bảng chính gồm:
+  - `iceberg.gold.fact_events`
+  - `iceberg.gold.fact_sales`
+  - `iceberg.gold.dim_time`
+  - `iceberg.gold.dim_product`
+  - `iceberg.gold.dim_user`
+  - `iceberg.gold.dim_session`
+  - `iceberg.gold.daily_event_summary`
+  - `iceberg.gold.daily_product_summary`
+  - `iceberg.gold.daily_category_summary`
+  - `iceberg.gold.daily_brand_summary`
 
-Logic chinh:
+![Airflow DAGs cho Bronze, Silver, Gold và Gold Metadata](imgs/airflow-dags.png)
 
-- Doc Bronze Parquet tu:
+![MinIO buckets Bronze, Silver và Gold](imgs/minio-buckets.png)
 
-```text
-s3a://bronze/ecommerce_events/
-```
+![Query Gold table thành công qua Trino](imgs/trino-gold-query.png)
 
-- Parse/cast type:
-  - timestamp/date/hour
-  - bigint ids
-  - decimal price
-  - brand/category/session normalized
-- Tao category levels `category_l1`, `category_l2`, `category_l3`.
-- Tao `source_event_id` tu Kafka partition/offset.
-- Tao `event_fingerprint` tu business event content.
-- Validate records voi cac rule:
-  - event timestamp bat buoc
-  - event type thuoc `view`, `cart`, `remove_from_cart`, `purchase`
-  - product/category/user/session/price hop le
-- Tach:
-  - valid output: `s3a://silver/ecommerce_events/`
-  - invalid output: `s3a://silver/ecommerce_events_invalid/`
-- Deduplicate valid events theo `event_fingerprint`.
-- Khi write mode `append`, job doc existing fingerprints de skip duplicate.
+### 4.2. Semantic Metadata cho AI Agent
 
-Airflow schedule:
+Gold Metadata pipeline tạo hai bảng metadata:
 
 ```text
-*/10 * * * *
+iceberg.metadata.semantic_table_catalog
+iceberg.metadata.semantic_column_catalog
 ```
 
-### 5.4 Gold
+Hai bảng này mô tả ý nghĩa business của từng bảng và từng cột trong Gold layer,
+ví dụ: bảng dùng để trả lời loại câu hỏi nào, grain của bảng là gì, cột nào đại
+diện cho doanh thu, lượt xem, conversion rate, brand, product hoặc category.
 
-Entry point:
-
-```text
-code/airflow/dags/gold_pipeline.py
-code/spark/gold/tasks/*.py
-```
-
-Gold dung Iceberg tables, catalog name mac dinh:
-
-```text
-iceberg_catalog
-```
-
-PostgreSQL chi luu Iceberg catalog metadata trong schema `iceberg`. Row data nam
-tren MinIO bucket `gold`.
-
-Gold DAG hien la manual trigger:
-
-```text
-gold_prepare_events
-  -> gold_build_facts
-  -> gold_build_dimensions
-  -> [
-       gold_build_daily_event_summary,
-       gold_build_daily_product_summary,
-       gold_build_daily_category_summary,
-       gold_build_daily_brand_summary
-     ]
-```
-
-Gold staging:
-
-```text
-iceberg_catalog.gold_staging.stg_events
-s3a://gold/gold_staging/stg_events
-```
-
-Gold facts:
-
-```text
-iceberg_catalog.gold.fact_events
-s3a://gold/gold/fact_events
-
-iceberg_catalog.gold.fact_sales
-s3a://gold/gold/fact_sales
-```
-
-Gold dimensions:
-
-```text
-iceberg_catalog.gold.dim_time
-iceberg_catalog.gold.dim_product
-iceberg_catalog.gold.dim_user
-iceberg_catalog.gold.dim_session
-```
-
-Gold summaries phuc vu dashboard/Agent:
-
-```text
-iceberg_catalog.gold.daily_event_summary
-iceberg_catalog.gold.daily_product_summary
-iceberg_catalog.gold.daily_category_summary
-iceberg_catalog.gold.daily_brand_summary
-```
-
-### 5.5 Gold metadata cho Agent
-
-Entry point:
-
-```text
-code/airflow/dags/gold_metadata_pipeline.py
-code/spark/gold/tasks/gold_build_metadata.py
-code/spark/gold/tasks/gold_validate_metadata.py
-```
-
-Metadata DAG hien la manual trigger va nen chay sau khi Gold tables da co.
-
-Code hien tai build:
-
-```text
-iceberg_catalog.metadata.semantic_table_catalog
-iceberg_catalog.metadata.semantic_column_catalog
-```
-
-Metadata duoc khai bao bang tay trong:
+AI Agent dùng metadata này để hiểu ý nghĩa business của dữ liệu trước khi sinh
+SQL. Bộ metadata chuẩn được khai báo trong:
 
 ```text
 code/spark/gold/metadata_definitions.py
 ```
 
-Agent dung metadata nay de biet bang/cot nao visible, grain, purpose,
-business terms va query notes.
+### 4.3. AI Analytics Agent
 
-## 6. Trino
-
-Trino compose:
+Người dùng có thể đặt câu hỏi như:
 
 ```text
-docker-compose.trino.yml
+Top 10 brand theo doanh thu trong tháng gần nhất
+Doanh thu theo ngày trong tháng gần nhất
+Danh mục nào có tỷ lệ chuyển đổi cao nhất?
+Sản phẩm nào được xem nhiều nhất?
 ```
 
-Trino image:
-
-```text
-trinodb/trino:481
-```
-
-Trino entrypoint generate runtime catalog configs:
-
-```text
-/etc/trino/catalog/iceberg.properties
-/etc/trino/catalog/postgres.properties
-```
-
-Trino expose host port:
-
-```text
-http://localhost:8082
-```
-
-Query mau:
-
-```sql
-SELECT *
-FROM iceberg.gold.daily_event_summary
-LIMIT 10;
-
-SELECT table_name, display_name, grain
-FROM iceberg.metadata.semantic_table_catalog
-ORDER BY table_name;
-```
-
-Luu y: Trino config dang set `iceberg.jdbc-catalog.schema-version=V0` de khop
-voi Spark/Iceberg JDBC catalog hien tai.
-
-## 7. Agent Backend
-
-Entry point:
-
-```text
-app/backend/api/main.py
-```
-
-Chay bang Docker:
-
-```bash
-make agent-build
-make agent-up
-```
-
-Swagger UI:
-
-```text
-http://localhost:8083/docs
-```
-
-Endpoints chinh:
-
-- `POST /auth/login`, `POST /auth/refresh`, `POST /auth/logout`, `GET /auth/me`
-- `GET /agent/stream`, `POST /agent/ask`, `/agent/sessions`, `/agent/runs/{run_id}/export.csv`
-- `/history`, `/catalog`, `/metrics`, `/pipelines`, `/settings`, `/ops/health`, `/quickstats`
-
-Backend dung lai `code/agent` lam engine LangGraph va mount `./code` read-only
-vao container. Neu muon hoi dap Text-to-SQL that, dien `GROQ_API_KEY` trong
-`envs/groq.env`, restart container `agent4da`, va dam bao Trino/Gold tables da san sang.
-
-LangGraph flow:
+Luồng xử lý của Agent:
 
 ```text
 guard_question
   -> load_metadata
+  -> check_answerability
+  -> resolve_entities
   -> build_prompt
   -> generate_sql
   -> guard_sql
   -> execute_sql
   -> profile_result
+  -> validate_result
   -> plan_chart
   -> generate_insight
   -> build_final_response
 ```
 
-Guardrail hien tai:
+Các cơ chế an toàn chính:
 
-- Chan cau hoi co y dinh destructive/prompt injection don gian.
-- SQL chi duoc la 1 statement `SELECT` hoac `WITH ... SELECT`.
-- Chan cac keyword nhu `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`,
-  `TRUNCATE`, `CREATE`, `MERGE`, `CALL`, `GRANT`, `REVOKE`, `EXECUTE`.
+- Chặn câu hỏi có ý định xóa, sửa, ghi dữ liệu hoặc prompt injection cơ bản.
+- Chỉ cho phép SQL dạng `SELECT` hoặc `WITH ... SELECT`.
+- Chặn các keyword như `INSERT`, `UPDATE`, `DELETE`, `DROP`, `ALTER`,
+  `TRUNCATE`, `CREATE`, `MERGE`, `CALL`, `GRANT`, `REVOKE`.
+- Tự thêm `LIMIT` mặc định nếu SQL không có giới hạn.
+- Có bước validate result và requery khi kết quả rỗng hoặc thiếu field quan
+  trọng.
 
-Env can co:
+### 4.4. Analytics Console
 
-```text
-GROQ_API_KEY
-TRINO_HOST
-TRINO_PORT
-TRINO_USER
-AGENT_MODEL
-```
+Frontend cung cấp các màn hình:
 
-Mac dinh Agent doc env tu:
+- **Ask**: Chat với AI Agent, xem SQL, bảng dữ liệu, biểu đồ và insight.
+- **Dashboard**: KPI tổng quan, doanh thu theo ngày, ranking brand/category/
+  product.
+- **History**: Lưu lịch sử câu hỏi, trạng thái, thời gian chạy, favorite và
+  re-run.
+- **Catalog**: Xem semantic metadata của Gold tables và columns.
+- **Pipelines**: Theo dõi trạng thái DAG Bronze, Silver, Gold, Metadata và
+  trigger pipeline.
+- **Settings**: Chọn theme, provider/model, chart mặc định, ngôn ngữ và xem
+  trạng thái cấu hình hệ thống.
 
-```text
-envs/endpoint.env
-envs/groq.env
-envs/postgre.env
-envs/iceberg.env
-```
+![Dashboard KPI và ranking](imgs/ui-dashboard.png)
 
-### 7.1 Frontend UI
+![Ask page với câu hỏi, SQL, chart và table](imgs/ui-ask.png)
 
-Entry point:
+![Catalog semantic metadata](imgs/ui-catalog.png)
 
-```text
-app/frontend/src/app
-```
+![Pipelines page](imgs/ui-pipelines.png)
 
-Chay UI bang Docker:
+## 5. Yêu cầu hệ thống
 
-```bash
-make frontend-build
-make frontend-up
-```
+Yêu cầu khuyến nghị để chạy local:
 
-Hoac chay chung toan bo stack data + backend + UI:
+* **Docker** và **Docker Compose**.
+* **Make** để dùng các lệnh tiện ích trong `Makefile`.
+* **Python 3.10+** cho Kafka producer chạy từ host.
+* **RAM 16GB+** được khuyến nghị vì stack gồm Kafka, Spark, Airflow, Trino,
+  PostgreSQL, MinIO, backend, frontend và monitoring.
+* **CPU 4 cores+** cho stack cơ bản; 8 cores+ giúp chạy mượt hơn.
+* **Dung lượng đĩa trống** cho Docker volumes, MinIO data và Spark logs.
+* **Kết nối Internet** để pull Docker images và tải dependencies.
 
-```bash
-make all-up
-```
+Các file runtime cần chuẩn bị:
 
-UI local:
+- `envs/*.env`: biến môi trường và secret local.
+- `jars/`: các JAR dependencies cho Spark, Kafka, Hadoop S3A, Iceberg,
+  PostgreSQL.
+- `data/`: sample CSV để nạp vào Kafka.
 
-```text
-http://localhost:3000
-```
+Chi tiết biến môi trường xem thêm: [`docs/ENV_SETUP.md`](docs/ENV_SETUP.md).
 
-Compose frontend build image tu `app/frontend/Dockerfile` va mac dinh gan
-`NEXT_PUBLIC_API_BASE_URL=http://localhost:8083`, nen browser se goi backend
-qua port host `8083`. Neu deploy tren VM/domain khac, build lai UI voi:
-
-```bash
-NEXT_PUBLIC_API_BASE_URL=http://<host-or-domain>:8083 make frontend-build
-make frontend-up
-```
-
-Khi doi origin cua UI, cap nhat `APP_CORS_ORIGINS` trong `envs/app.env` cho
-backend va restart `agent-api`.
-
-## 8. Cach chay local tham khao
-
-Tao network neu chay thu cong. Khi dung Makefile, target `*-up` va `all-up`
-se tu tao network neu chua co:
-
-```bash
-docker network create data_network
-```
-
-Makefile mac dinh dung Docker Compose plugin `docker compose`.
-
-Build cac image local lan dau hoac khi Dockerfile/code image thay doi:
-
-```bash
-make all-build
-```
-
-Hoac build rieng tung image can build:
-
-```bash
-make airflow-build
-make agent-build
-make frontend-build
-```
-
-Start toan bo stack bang Makefile:
-
-```bash
-make all-up
-```
-
-`make *-up` va `make all-up` chi start container voi `--no-build`; build duoc
-tach rieng qua cac target `*-build`.
-
-Dung:
-
-```bash
-make all-down
-```
-
-`all-up/all-down` dung chung day du cac compose file cua Kafka, MinIO, Spark,
-Airflow, Trino, backend va frontend. Cach nay giup `down` go dung cung Docker
-Compose project, tranh tinh trang UI/backend hoac data service con chay le.
-
-Start cac service thu cong theo thu tu neu can debug rieng:
-
-```bash
-docker compose -f docker-compose.airflow.yml build
-docker compose -f docker-compose.agent.yml build
-docker compose -f docker-compose.frontend.yml build
-
-docker compose -f docker-compose.kafka.yml up -d --no-build
-docker compose -f docker-compose.minio.yml up -d --no-build
-docker compose -f docker-compose.spark.yml up -d --no-build
-docker compose -f docker-compose.airflow.yml up -d --no-build
-docker compose -f docker-compose.trino.yml up -d --no-build
-docker compose -f docker-compose.agent.yml up -d --no-build
-docker compose -f docker-compose.frontend.yml up -d --no-build
-```
-
-Khong can chay `docker-compose.postgre.yml` rieng neu da chay
-`docker-compose.airflow.yml`, vi Airflow compose da co PostgreSQL.
-
-Submit Bronze/Silver thu cong:
-
-```bash
-bash script/spark/submit_bronze.sh
-bash script/spark/submit_silver.sh
-```
-
-Trigger DAGs:
-
-```bash
-docker exec -it airflow airflow dags list
-docker exec -it airflow airflow dags trigger gold_pipeline
-docker exec -it airflow airflow dags trigger gold_metadata_pipeline
-```
-
-Mo UI local:
+## 6. Cấu trúc thư mục dự án
 
 ```text
-Spark UI:   http://localhost:8080
-Airflow:    http://localhost:8081
-MinIO:      http://localhost:9001
-Trino:      http://localhost:8082
-Backend:    http://localhost:8083/docs
-Frontend:   http://localhost:3000
+agent4da/
+├── app/
+│   ├── backend/                 # FastAPI backend cho UI và Agent
+│   └── frontend/                # Next.js Analytics Console
+├── code/
+│   ├── agent/                   # LangGraph Agent engine
+│   ├── airflow/dags/            # Airflow DAGs
+│   ├── kafka/                   # CSV producer và Kafka helper
+│   └── spark/                   # Bronze, Silver, Gold Spark jobs
+├── docs/                        # Tài liệu chi tiết theo module
+├── envs/                        # Local environment files
+├── init/                        # PostgreSQL init scripts
+├── jars/                        # Spark/Iceberg/Hadoop/Kafka/PostgreSQL jars
+├── monitoring/                  # Prometheus, Grafana dashboards, exporters docs
+├── notebook/                    # Notebook xem và debug dữ liệu
+├── script/                      # Helper scripts cho Spark/Kafka/PostgreSQL
+├── trino/                       # Trino config và entrypoint
+├── docker-compose.*.yml         # Compose files theo từng service group
+├── Makefile                     # Service manager cho local stack
+├── README.md                    # Tài liệu tổng quan này
+└── PROJECT.md                   # Mô tả ngắn về project
 ```
 
-## 9. Ke hoach deploy len GCP
+## 7. Hướng dẫn cài đặt và triển khai
 
-### Khuyen nghi ngan han: 1 VM Compute Engine chay Docker Compose
+### 7.1. Thiết lập ban đầu
 
-Voi tinh trang project hien tai, cach hop ly nhat de demo la deploy len 1 VM
-Compute Engine va chay Docker Compose. Cach nay khong phai phan tan theo nhieu
-may vat ly, nhung van the hien duoc kien truc phan tan o muc service/container:
+1. **Chuẩn bị các file môi trường**
 
-- Kafka la service rieng.
-- Spark master la service rieng.
-- Spark worker 1 va worker 2 la 2 executor node rieng.
-- MinIO la object storage S3-compatible rieng.
-- PostgreSQL la catalog DB rieng.
-- Airflow la orchestrator rieng.
-- Trino la query engine rieng.
-- Agent API la service rieng.
+   Kiểm tra các file trong `envs/`, đặc biệt:
 
-Day la phu hop nhat de demo trong ngan sach Free Trial $300 vi:
+   - `envs/minio.env`
+   - `envs/postgre.env`
+   - `envs/airflow.env`
+   - `envs/iceberg.env`
+   - `envs/spark.env`
+   - `envs/app.env`
+   - `envs/gemini.env` hoặc `envs/groq.env` cho LLM provider của AI Agent.
 
-- Khong phai doi code sang Dataproc/GKE ngay.
-- Giu nguyen MinIO/Iceberg/PostgreSQL/Trino nhu local.
-- De debug bang Docker logs va UI.
-- Co the stop VM khi khong demo de tiet kiem credit.
+   Không hardcode secret vào source code hoặc README. Với môi trường local, thay các
+   giá trị `change_me` bằng giá trị phù hợp trên máy chạy.
 
-Google Cloud Free Trial hien cho new customers $300 credit de thu va build proof
-of concept. Compute Engine Always Free co e2-micro, nhung e2-micro qua yeu cho
-stack nay. GCP docs mo ta e2-micro la shared-core voi 2 vCPU nhung chi sustain
-khoang 25% CPU time va memory nho, khong phu hop chay Kafka + Spark + Airflow +
-Trino + MinIO cung luc.
+2. **Chuẩn bị JARs cho Spark**
 
-May VM nen can nhac cho demo:
+   Các job Spark dùng JARs trong thư mục `jars/` để đọc Kafka, truy cập MinIO
+   qua S3A, ghi Iceberg và kết nối PostgreSQL.
 
-- Toi thieu de thu nhe: `e2-standard-2` voi 2 vCPU, 8 GB RAM. Can giam memory
-  worker, co the phai tat bot Airflow/Trino khi khong dung.
-- De demo on hon: `e2-standard-4` voi 4 vCPU, 16 GB RAM. Phu hop hon voi 1
-  Spark master + 2 worker moi worker 1-2 GB, cung Kafka/MinIO/Postgres/Trino.
-- Disk: 50-100 GB persistent disk tuy data/jars/logs. Stack co jars hon 700 MB
-  va MinIO data se tang theo pipeline.
+3. **Dùng Makefile làm lối chạy chính**
 
-### Can sua truoc khi deploy demo
+   Project đã có `Makefile` để gom các lệnh Docker Compose dài thành các lệnh
+   ngắn, thống nhất và ít nhầm service/port hơn. Khi chạy bằng `make`, network
+   `data_network` được tạo tự động.
 
-1. Sua Spark compose de co 2 worker.
+   | Lệnh | Mục đích |
+   | --- | --- |
+   | `make all-build` | Build các image local cần thiết |
+   | `make all-up` | Khởi động toàn bộ stack |
+   | `make ps` | Xem trạng thái containers |
+   | `make all-down` | Dừng toàn bộ stack |
+   | `make agent-build && make agent-up` | Build và chạy riêng backend |
+   | `make frontend-build && make frontend-up` | Build và chạy riêng frontend |
+   | `make monitoring-up` | Chạy riêng Prometheus/Grafana stack |
 
-   Cach ro rang nhat la tao 2 service:
+### 7.2. Build và khởi động hệ thống
 
-   ```text
-   spark-worker-1
-   spark-worker-2
-   ```
-
-   Ca hai cung command:
-
-   ```text
-   /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077
-   ```
-
-   Moi worker nen set memory phu hop VM, vi du:
-
-   ```text
-   SPARK_WORKER_CORES=1
-   SPARK_WORKER_MEMORY=1g
-   ```
-
-   Tren VM 16 GB co the dung:
-
-   ```text
-   SPARK_WORKER_CORES=2
-   SPARK_WORKER_MEMORY=2g
-   ```
-
-2. Build service Agent backend va Frontend UI.
-
-   Repo da co `docker-compose.agent.yml` va `app/backend/Dockerfile`. Service
-   la `agent-api`, container name la `agent4da`, expose port `8083`.
-   Frontend dung `docker-compose.frontend.yml` va `app/frontend/Dockerfile`,
-   container name `agent4da-ui`, expose port `3000`.
-
-3. Dieu chinh env cho cloud.
-
-   - `TRINO_HOST=trino` neu Agent chay trong Docker network.
-   - `TRINO_PORT=8080` neu Agent goi Trino noi bo container.
-   - `MINIO_ENDPOINT=http://minio:9000` cho Spark/Airflow/Trino noi bo.
-   - `AIRFLOW__WEBSERVER__BASE_URL` co the doi sang external IP/domain neu mo
-     Airflow truc tiep.
-   - Khong commit `GROQ_API_KEY` hay password len git.
-
-4. Quyet dinh cach expose UI/API.
-
-   Khuyen nghi an toan cho demo:
-
-   - Public mo `3000` cho Frontend UI khi can demo truc tiep.
-   - Backend `8083` phai reachable tu browser theo
-     `NEXT_PUBLIC_API_BASE_URL`; neu khong public `8083`, can reverse proxy UI
-     va API qua cung domain.
-   - Cac UI quan tri nhu Airflow `8081`, Spark `8080`, MinIO `9001`, Trino
-     `8082` nen dung SSH tunnel hoac firewall source IP rieng.
-
-5. Backup/restore data.
-
-   Hien MinIO dung Docker named volume. Tren GCP VM neu xoa VM/disk thi mat
-   data. Nen snapshot disk hoac backup MinIO volume neu can giu ket qua.
-
-### Cac buoc deploy VM muc cao
-
-1. Tao GCP project, enable billing, dat budget alert.
-2. Tao Compute Engine VM Ubuntu o region gan ban.
-3. Chon machine type `e2-standard-4` neu muon demo on, hoac `e2-standard-2` neu
-   muon tiet kiem hon.
-4. Gan persistent disk 50-100 GB.
-5. Cai Docker Engine va Docker Compose plugin.
-6. Clone repo len VM.
-7. Tao/copy cac folder bi gitignore:
-
-   ```text
-   envs/
-   jars/
-   data/
-   ```
-
-8. Tao Docker network:
+1. **Build các image local**
 
    ```bash
-   docker network create data_network
+   make all-build
    ```
 
-9. Start stack bang Makefile:
+   Có thể build riêng từng nhóm:
+
+   ```bash
+   make airflow-build
+   make agent-build
+   make frontend-build
+   ```
+
+2. **Khởi động toàn bộ stack**
 
    ```bash
    make all-up
    ```
 
-   Hoac start thu cong theo thu tu:
+   Lệnh này khởi động Kafka, MinIO, Spark, Airflow, Trino, backend, frontend và
+   monitoring. `make all-up` dùng image đã build sẵn, nên quy trình chuẩn là
+   build trước rồi start stack.
+
+3. **Kiểm tra trạng thái containers**
 
    ```bash
-   docker compose -f docker-compose.airflow.yml build
-   docker compose -f docker-compose.agent.yml build
-   docker compose -f docker-compose.frontend.yml build
-
-   docker compose -f docker-compose.kafka.yml up -d --no-build
-   docker compose -f docker-compose.minio.yml up -d --no-build
-   docker compose -f docker-compose.spark.yml up -d --no-build
-   docker compose -f docker-compose.airflow.yml up -d --no-build
-   docker compose -f docker-compose.trino.yml up -d --no-build
-   docker compose -f docker-compose.agent.yml up -d --no-build
-   docker compose -f docker-compose.frontend.yml up -d --no-build
+   make ps
    ```
 
-10. Kiem tra UI tai `http://<vm-ip>:3000` va backend docs tai
-    `http://<vm-ip>:8083/docs`.
-11. Gui data vao Kafka bang producer.
-12. Chay Bronze/Silver hoac bat DAG Airflow.
-13. Trigger `gold_pipeline`.
-14. Trigger `gold_metadata_pipeline`.
-15. Test Trino query Gold va metadata.
-16. Test backend endpoint `/agent/ask` hoac `/agent/stream` qua frontend.
+4. **Dừng toàn bộ stack**
 
-### Firewall/port goi y
+   ```bash
+   make all-down
+   ```
 
-Mo toi thieu:
+### 7.3. Nạp dữ liệu vào Kafka
 
-```text
-tcp:22    SSH
-tcp:3000  Frontend UI neu can public demo
-tcp:8083  Agent backend neu browser can goi truc tiep
-```
-
-Chi mo khi can demo/debug, va nen restrict source IP:
-
-```text
-tcp:8081  Airflow UI
-tcp:8080  Spark UI
-tcp:9001  MinIO console
-tcp:8082  Trino
-```
-
-Khong nen public:
-
-```text
-tcp:5432  PostgreSQL
-tcp:9000  MinIO S3 API
-tcp:7077  Spark master
-tcp:9092  Kafka
-```
-
-Dung SSH tunnel neu chi ban truy cap:
+Sau khi Kafka đã chạy, gửi sample CSV vào topic `ecommerce_events`:
 
 ```bash
-ssh -L 8083:localhost:8083 -L 3000:localhost:3000 -L 8081:localhost:8081 -L 8080:localhost:8080 -L 9001:localhost:9001 -L 8082:localhost:8082 <user>@<vm-external-ip>
+python code/kafka/producer.py \
+  --file data/event_test_1000.csv \
+  --broker localhost:9092 \
+  --topic ecommerce_events
 ```
 
-## 10. Phuong an deploy that su phan tan hon
+Producer đọc từng dòng CSV, chuyển thành JSON và gửi vào Kafka.
 
-Sau khi demo Compose on, co the nang cap theo 2 huong:
+### 7.4. Chạy pipeline dữ liệu
 
-### Huong A: nhieu VM
+Pipeline dữ liệu được điều phối bằng Airflow. Bronze và Silver có lịch chạy mỗi
+10 phút; Gold và Gold Metadata được trigger khi cần build lại layer phân tích.
 
-- VM 1: Kafka + Airflow + Agent.
-- VM 2: Spark master + Trino.
-- VM 3-4: Spark workers.
-- VM 5 hoac managed DB: PostgreSQL.
-- Object storage: chuyen MinIO sang Cloud Storage hoac giu MinIO rieng.
+Cách chạy trực tiếp trên Airflow UI:
 
-Huong nay the hien phan tan that hon, nhung tang chi phi va can network/security
-nhieu hon.
+1. Mở Airflow tại `http://localhost:8081`.
+2. Vào danh sách DAGs.
+3. Trigger lần lượt các DAG:
+   - `bronze_pipeline`
+   - `silver_pipeline`
+   - `gold_pipeline`
+   - `gold_metadata_pipeline`
 
-### Huong B: dich vu managed GCP
+Cách chạy nhanh bằng CLI trong container Airflow:
 
-- Kafka: Confluent Cloud hoac Pub/Sub.
-- Spark: Dataproc.
-- Object storage: Cloud Storage.
-- Catalog/DB: Cloud SQL PostgreSQL.
-- Orchestration: Cloud Composer hoac Airflow tren VM.
-- SQL engine: BigQuery/Dataproc Trino tu quan ly.
-- Agent: Cloud Run hoac Compute Engine.
+```bash
+docker exec airflow airflow dags trigger bronze_pipeline
+docker exec airflow airflow dags trigger silver_pipeline
+docker exec airflow airflow dags trigger gold_pipeline
+docker exec airflow airflow dags trigger gold_metadata_pipeline
+```
 
-Huong nay cloud-native hon nhung can refactor connector/path/env kha nhieu. Voi
-tinh trang project hien tai, chua nen lam ngay neu muc tieu la demo nhanh trong
-$300.
+Thứ tự chạy end-to-end:
 
-## 11. Checklist demo thanh cong
+1. Gửi CSV vào Kafka.
+2. Trigger `bronze_pipeline`.
+3. Trigger `silver_pipeline`.
+4. Trigger `gold_pipeline`.
+5. Trigger `gold_metadata_pipeline`.
+6. Mở Trino hoặc frontend để kiểm tra Gold data.
 
-- Spark UI hien 1 master va 2 workers alive.
-- Kafka co topic `ecommerce_events` va co message.
-- Bronze bucket co Parquet files va offset JSON.
-- Silver bucket co valid/invalid Parquet outputs.
-- Airflow DAG Bronze/Silver/Gold co task success.
-- PostgreSQL schema `iceberg` co Iceberg catalog metadata.
-- MinIO bucket `gold` co data files cua Gold Iceberg tables.
-- Trino query duoc:
+Query mẫu trong Trino:
 
-  ```sql
-  SELECT * FROM iceberg.gold.daily_event_summary LIMIT 10;
-  SELECT * FROM iceberg.metadata.semantic_table_catalog LIMIT 10;
-  ```
+```sql
+SELECT *
+FROM iceberg.gold.daily_event_summary
+LIMIT 10;
+```
 
-- Backend `/catalog/tables` tra ve source metadata tu Trino neu san sang, hoac
-  fallback tu static definitions trong `code/spark/gold/metadata_definitions.py`.
-- Backend `/agent/ask` va `/agent/stream` sinh SQL read-only, query Trino va
-  tra ve rows/insight cho frontend.
-- Frontend `http://localhost:3000` load duoc UI va goi backend `8083` thanh cong.
+```sql
+SELECT table_name, display_name, grain
+FROM iceberg.metadata.semantic_table_catalog
+ORDER BY table_name;
+```
 
-## 12. Tai lieu lien quan
+### 7.5. Sử dụng Analytics Console
 
-- `docs/ENV_SETUP.md`
-- `docs/TRINO_ENV.md`
-- `docs/AGENT_FASTAPI.md`
-- `docs/GOLD_REFACTOR_TEST_ENV.md`
-- `docs/GOLD_STAGING_TASK.md`
-- `docs/GOLD_FACTS_TASK.md`
-- `docs/GOLD_SUMMARIES_TASK.md`
-- `docs/GOLD_METADATA_PIPELINE.md`
+1. Mở frontend:
 
-Khi co conflict giua docs va code, uu tien code hien tai.
+   ```text
+   http://localhost:3000
+   ```
+
+2. Đăng nhập bằng admin được seed từ `envs/app.env`:
+
+   ```text
+   APP_BOOTSTRAP_ADMIN_EMAIL
+   APP_BOOTSTRAP_ADMIN_PASSWORD
+   ```
+
+3. Vào các màn hình chính:
+
+   - **Dashboard** để xem KPI và ranking.
+   - **Ask** để hỏi AI Agent.
+   - **History** để xem lại các lần hỏi.
+   - **Catalog** để kiểm tra semantic metadata.
+   - **Pipelines** để xem và trigger DAGs.
+   - **Settings** để chọn provider/model và kiểm tra cấu hình.
+
+### 7.6. Giám sát bằng Prometheus và Grafana
+
+Monitoring được chạy cùng `make all-up`. Có thể chạy riêng bằng:
+
+```bash
+make monitoring-up
+```
+
+Các UI monitoring:
+
+- Prometheus: `http://localhost:19090`
+- Grafana: `http://localhost:13000`
+
+Grafana có các dashboard:
+
+- System Overview
+- AI Agent Performance
+- ETL Pipeline Monitoring
+- Query / Data Layer
+
+Backend expose Prometheus metrics tại:
+
+```text
+http://localhost:8083/metrics
+```
+
+![Prometheus targets và metrics](imgs/prometheus.png)
+
+![Grafana dashboard AI Agent Performance](imgs/grafana-agent-performance.png)
+
+## 8. Các URLs quan trọng
+
+| Dịch vụ | URL | Mô tả |
+| --- | --- | --- |
+| Frontend Analytics Console | `http://localhost:3000` | Giao diện chính cho người dùng |
+| Backend Swagger UI | `http://localhost:8083/docs` | Tài liệu API tương tác |
+| Backend Metrics | `http://localhost:8083/metrics` | Prometheus scrape endpoint |
+| Airflow UI | `http://localhost:8081` | Quản lý DAGs và task logs |
+| MinIO Console | `http://localhost:9001` | Xem buckets `bronze`, `silver`, `gold` |
+| MinIO S3 API | `http://localhost:9000` | Endpoint S3-compatible |
+| Spark Master UI | `http://localhost:8080` | Theo dõi Spark cluster |
+| Trino | `http://localhost:8082` | SQL query engine |
+| Kafka external bootstrap | `localhost:9092` | Producer chạy từ host |
+| PostgreSQL | `localhost:5432` | Shared DB cho catalog/app/Airflow |
+| Prometheus | `http://localhost:19090` | Metrics và targets |
+| Grafana | `http://localhost:13000` | Dashboards |
+
+## 9. Checklist kiểm thử end-to-end
+
+Checklist dưới đây giúp kiểm tra nhanh toàn bộ hệ thống từ ingestion đến UI và
+monitoring:
+
+1. **Kiểm tra kiến trúc**
+
+   Đối chiếu các service chính: Kafka, Spark, MinIO, Iceberg, PostgreSQL, Trino,
+   FastAPI, Next.js và monitoring.
+
+2. **Kiểm tra Airflow DAGs**
+
+   Mở Airflow tại `http://localhost:8081`, kiểm tra các DAG:
+
+   - `bronze_pipeline`
+   - `silver_pipeline`
+   - `gold_pipeline`
+   - `gold_metadata_pipeline`
+
+3. **Kiểm tra dữ liệu trên MinIO**
+
+   Mở MinIO tại `http://localhost:9001`, kiểm tra buckets:
+
+   - `bronze`
+   - `silver`
+   - `gold`
+
+4. **Query Gold data bằng Trino**
+
+   Chạy query trên `iceberg.gold.daily_event_summary` hoặc
+   `iceberg.metadata.semantic_table_catalog` để chứng minh Gold layer đã query
+   được bằng SQL.
+
+5. **Kiểm tra Analytics Console**
+
+   Truy cập `http://localhost:3000`, vào Dashboard để xem KPI và Ask để hỏi AI
+   Agent. Câu hỏi kiểm thử gợi ý:
+
+   ```text
+   Top 10 brand theo doanh thu trong tháng gần nhất
+   ```
+
+6. **Kiểm tra guardrail của Agent**
+
+   Kiểm tra Agent không cho phép SQL ghi/xóa/sửa dữ liệu, chỉ sinh truy vấn đọc,
+   có semantic metadata và có bước validate result.
+
+7. **Kiểm tra monitoring**
+
+   Mở Grafana tại `http://localhost:13000`, xem dashboard AI Agent Performance
+   hoặc ETL Pipeline Monitoring để chứng minh hệ thống có observability.
+
+## 10. Tài liệu chi tiết
+
+Các tài liệu sâu hơn nằm trong thư mục `docs/`:
+
+- [`docs/README.md`](docs/README.md): tài liệu tổng quan kỹ thuật chi tiết hơn.
+- [`docs/ENV_SETUP.md`](docs/ENV_SETUP.md): các biến môi trường cần chuẩn bị.
+- [`docs/AGENT_API.md`](docs/AGENT_API.md): API liên quan Agent.
+- [`docs/AGENT_DEBUG.md`](docs/AGENT_DEBUG.md): hướng dẫn debug Agent.
+- [`docs/TRINO_ENV.md`](docs/TRINO_ENV.md): cấu hình Trino.
+- [`docs/GOLD_METADATA_PIPELINE.md`](docs/GOLD_METADATA_PIPELINE.md): metadata
+  pipeline cho Agent.
+- [`monitoring/README.md`](monitoring/README.md): module Prometheus/Grafana.
+
+## 11. Cấu hình triển khai
+
+- `make all-up` là lệnh khởi động chuẩn cho toàn bộ project, bao gồm cả
+  PostgreSQL shared instance trong `docker-compose.airflow.yml`.
+- Kafka producer chạy từ host sử dụng bootstrap server `localhost:9092`.
+- Trino query Gold layer qua Iceberg catalog ở chế độ đọc an toàn.
+- AI Agent sử dụng Gemini hoặc Groq thông qua các biến môi trường trong
+  `envs/gemini.env` hoặc `envs/groq.env`.
+- Frontend gọi backend qua `NEXT_PUBLIC_API_BASE_URL`; backend kiểm soát CORS
+  bằng `APP_CORS_ORIGINS`.
+
+---
+
+*Tài liệu này được cập nhật lần cuối vào: 11/06/2026.*
