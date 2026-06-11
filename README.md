@@ -45,43 +45,6 @@ CSV sample data
 
 Sơ đồ logic của hệ thống:
 
-```text
-+------------------+       +--------------------+
-| CSV Producer     | ----> | Kafka KRaft        |
-| code/kafka       |       | ecommerce_events   |
-+------------------+       +---------+----------+
-                                      |
-                                      v
-+------------------+       +--------------------+       +------------------+
-| Airflow DAGs     | ----> | Spark Standalone   | ----> | MinIO Buckets    |
-| Orchestration    |       | master + worker    |       | bronze/silver/   |
-+------------------+       +---------+----------+       | gold             |
-                                      |                  +--------+---------+
-                                      v                           |
-                            +--------------------+                |
-                            | Iceberg Gold       | <--------------+
-                            | tables             |
-                            +---------+----------+
-                                      |
-                                      v
-                            +--------------------+       +------------------+
-                            | PostgreSQL         |       | Trino            |
-                            | App DB + Catalog   | <---- | SQL Engine       |
-                            +--------------------+       +--------+---------+
-                                                                  |
-                                                                  v
-                                                        +------------------+
-                                                        | FastAPI Backend  |
-                                                        | LangGraph Agent  |
-                                                        +--------+---------+
-                                                                 |
-                                                                 v
-                                                        +------------------+
-                                                        | Next.js UI       |
-                                                        | Analytics App    |
-                                                        +------------------+
-```
-
 ![Sơ đồ kiến trúc tổng thể Agent4DA](imgs/architecture.png)
 
 Hệ thống được tách thành ba nhóm chính:
@@ -341,8 +304,7 @@ agent4da/
    - `envs/app.env`
    - `envs/gemini.env` hoặc `envs/groq.env` cho LLM provider của AI Agent.
 
-   Không hardcode secret vào source code hoặc README. Với môi trường local, thay các
-   giá trị `change_me` bằng giá trị phù hợp trên máy chạy.
+   Thay các giá trị `change_me` bằng giá trị phù hợp trên máy chạy.
 
 2. **Chuẩn bị JARs cho Spark**
 
@@ -609,7 +571,3 @@ Các tài liệu sâu hơn nằm trong thư mục `docs/`:
   `envs/gemini.env` hoặc `envs/groq.env`.
 - Frontend gọi backend qua `NEXT_PUBLIC_API_BASE_URL`; backend kiểm soát CORS
   bằng `APP_CORS_ORIGINS`.
-
----
-
-*Tài liệu này được cập nhật lần cuối vào: 11/06/2026.*
