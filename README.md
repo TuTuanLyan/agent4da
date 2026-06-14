@@ -45,7 +45,7 @@ CSV sample data
 
 Sơ đồ logic của hệ thống:
 
-![Sơ đồ kiến trúc tổng thể Agent4DA](imgs/architecture.png)
+![Sơ đồ kiến trúc tổng thể Agent4DA](imgs/SystemFlow.png)
 
 Hệ thống được tách thành ba nhóm chính:
 
