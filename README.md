@@ -2,22 +2,25 @@
 
 ## 1. Tổng quan dự án
 
-Agent4DA là một project data platform cho dữ liệu e-commerce, kết hợp pipeline
-xử lý dữ liệu với một AI analytics agent ở lớp ứng dụng. Thay vì chỉ dừng ở
-việc ETL dữ liệu, project đi trọn một vòng: đưa event vào Kafka, xử lý qua các
-tầng Bronze/Silver/Gold, query Gold layer bằng Trino, rồi dùng giao diện web để
-xem dashboard hoặc đặt câu hỏi bằng ngôn ngữ tự nhiên.
+Agent4DA là một hệ thống data engineering và AI analytics cho dữ liệu
+e-commerce. Dự án xây dựng pipeline dữ liệu theo Medallion Architecture
+(`Bronze` -> `Silver` -> `Gold`), lưu trữ dữ liệu trên MinIO, quản lý Gold
+tables bằng Apache Iceberg và truy vấn bằng Trino.
 
-Điểm chính của project là mô phỏng một lakehouse local theo Medallion
-Architecture. Dữ liệu thô được giữ ở Bronze, dữ liệu đã chuẩn hóa đi vào
-Silver, còn Gold là nơi chứa các bảng phân tích được quản lý bằng Apache
-Iceberg. Từ Gold layer, hệ thống phục vụ hai hướng sử dụng: dashboard BI truyền
-thống và AI Agent có khả năng sinh SQL, chạy truy vấn, vẽ biểu đồ và diễn giải
-kết quả.
+Phần ứng dụng gồm FastAPI backend, Next.js frontend và LangGraph-based AI
+Agent. Người dùng có thể xem dashboard, tra cứu catalog, theo dõi pipeline,
+xem lịch sử truy vấn và đặt câu hỏi bằng ngôn ngữ tự nhiên để hệ thống sinh
+SQL, chạy truy vấn và trả về bảng dữ liệu/biểu đồ.
 
-Nói ngắn gọn, Agent4DA bao gồm đủ các mảnh quan trọng của một hệ thống data
-platform: ingestion, storage, processing, orchestration, query engine, semantic
-metadata, analytics application và observability.
+Các nhóm chức năng chính:
+
+- Data ingestion từ CSV vào Kafka.
+- ETL/ELT bằng Spark qua các tầng Bronze, Silver và Gold.
+- Orchestration bằng Airflow.
+- Lakehouse storage bằng MinIO, Apache Iceberg và PostgreSQL JDBC catalog.
+- Query serving bằng Trino.
+- Analytics Console và AI Agent cho truy vấn dữ liệu.
+- Observability bằng Prometheus và Grafana.
 
 ## 2. Kiến trúc hệ thống
 
@@ -36,45 +39,6 @@ CSV sample data
    -> Trino SQL engine
    -> FastAPI + LangGraph AI Agent
    -> Next.js Analytics Console
-```
-
-Sơ đồ logic của hệ thống:
-
-```text
-+------------------+       +--------------------+
-| CSV Producer     | ----> | Kafka KRaft        |
-| code/kafka       |       | ecommerce_events   |
-+------------------+       +---------+----------+
-                                      |
-                                      v
-+------------------+       +--------------------+       +------------------+
-| Airflow DAGs     | ----> | Spark Standalone   | ----> | MinIO Buckets    |
-| Orchestration    |       | master + worker    |       | bronze/silver/   |
-+------------------+       +---------+----------+       | gold             |
-                                      |                  +--------+---------+
-                                      v                           |
-                            +--------------------+                |
-                            | Iceberg Gold       | <--------------+
-                            | tables             |
-                            +---------+----------+
-                                      |
-                                      v
-                            +--------------------+       +------------------+
-                            | PostgreSQL         |       | Trino            |
-                            | App DB + Catalog   | <---- | SQL Engine       |
-                            +--------------------+       +--------+---------+
-                                                                  |
-                                                                  v
-                                                        +------------------+
-                                                        | FastAPI Backend  |
-                                                        | LangGraph Agent  |
-                                                        +--------+---------+
-                                                                 |
-                                                                 v
-                                                        +------------------+
-                                                        | Next.js UI       |
-                                                        | Analytics App    |
-                                                        +------------------+
 ```
 
 ![Sơ đồ kiến trúc tổng thể Agent4DA](./imgs/SystemFlow.png)
