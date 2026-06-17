@@ -2,27 +2,22 @@
 
 ## 1. Tổng quan dự án
 
-Agent4DA là một hệ thống xử lý dữ liệu và phân tích thông minh cho dữ liệu
-e-commerce. Dự án mô phỏng một nền tảng dữ liệu hiện đại theo kiến trúc
-Medallion Architecture, gồm các tầng Bronze, Silver và Gold, sau đó sử dụng
-Trino và AI Agent để người dùng có thể đặt câu hỏi bằng ngôn ngữ tự nhiên và
-nhận lại SQL, bảng kết quả, biểu đồ và phần diễn giải.
+Agent4DA là một project data platform cho dữ liệu e-commerce, kết hợp pipeline
+xử lý dữ liệu với một AI analytics agent ở lớp ứng dụng. Thay vì chỉ dừng ở
+việc ETL dữ liệu, project đi trọn một vòng: đưa event vào Kafka, xử lý qua các
+tầng Bronze/Silver/Gold, query Gold layer bằng Trino, rồi dùng giao diện web để
+xem dashboard hoặc đặt câu hỏi bằng ngôn ngữ tự nhiên.
 
-Mục tiêu của dự án không chỉ là xây dựng một pipeline ETL, mà là hoàn thiện một
-luồng end-to-end:
+Điểm chính của project là mô phỏng một lakehouse local theo Medallion
+Architecture. Dữ liệu thô được giữ ở Bronze, dữ liệu đã chuẩn hóa đi vào
+Silver, còn Gold là nơi chứa các bảng phân tích được quản lý bằng Apache
+Iceberg. Từ Gold layer, hệ thống phục vụ hai hướng sử dụng: dashboard BI truyền
+thống và AI Agent có khả năng sinh SQL, chạy truy vấn, vẽ biểu đồ và diễn giải
+kết quả.
 
-- Thu thập dữ liệu sự kiện thương mại điện tử từ CSV vào Kafka.
-- Xử lý dữ liệu bằng Spark và lưu trên MinIO theo từng tầng dữ liệu.
-- Chuẩn hóa dữ liệu, kiểm tra chất lượng và loại bỏ trùng lặp.
-- Xây dựng Gold layer bằng Apache Iceberg để phục vụ truy vấn phân tích.
-- Truy vấn dữ liệu qua Trino.
-- Xây dựng FastAPI backend và Next.js frontend cho dashboard, catalog, lịch sử
-  truy vấn và AI Agent.
-- Giám sát hệ thống bằng Prometheus và Grafana.
-
-Về tổng thể, Agent4DA là một project lakehouse local có đủ các phần chính của
-một hệ thống data platform: ingestion, storage, processing, orchestration,
-query engine, semantic metadata, AI analytics application và observability.
+Nói ngắn gọn, Agent4DA bao gồm đủ các mảnh quan trọng của một hệ thống data
+platform: ingestion, storage, processing, orchestration, query engine, semantic
+metadata, analytics application và observability.
 
 ## 2. Kiến trúc hệ thống
 
@@ -45,7 +40,44 @@ CSV sample data
 
 Sơ đồ logic của hệ thống:
 
-![Sơ đồ kiến trúc tổng thể Agent4DA](imgs/SystemFlow.png)
+```text
++------------------+       +--------------------+
+| CSV Producer     | ----> | Kafka KRaft        |
+| code/kafka       |       | ecommerce_events   |
++------------------+       +---------+----------+
+                                      |
+                                      v
++------------------+       +--------------------+       +------------------+
+| Airflow DAGs     | ----> | Spark Standalone   | ----> | MinIO Buckets    |
+| Orchestration    |       | master + worker    |       | bronze/silver/   |
++------------------+       +---------+----------+       | gold             |
+                                      |                  +--------+---------+
+                                      v                           |
+                            +--------------------+                |
+                            | Iceberg Gold       | <--------------+
+                            | tables             |
+                            +---------+----------+
+                                      |
+                                      v
+                            +--------------------+       +------------------+
+                            | PostgreSQL         |       | Trino            |
+                            | App DB + Catalog   | <---- | SQL Engine       |
+                            +--------------------+       +--------+---------+
+                                                                  |
+                                                                  v
+                                                        +------------------+
+                                                        | FastAPI Backend  |
+                                                        | LangGraph Agent  |
+                                                        +--------+---------+
+                                                                 |
+                                                                 v
+                                                        +------------------+
+                                                        | Next.js UI       |
+                                                        | Analytics App    |
+                                                        +------------------+
+```
+
+![Sơ đồ kiến trúc tổng thể Agent4DA](./imgs/SystemFlow.png)
 
 Hệ thống được tách thành ba nhóm chính:
 
@@ -76,103 +108,108 @@ Hệ thống được tách thành ba nhóm chính:
 
 ### Data Engineering & Lakehouse
 
-* **Apache Kafka**: Message broker nhận dữ liệu sự kiện e-commerce từ CSV
-  producer. Project dùng Kafka KRaft, không cần Zookeeper.
-* **Apache Spark**: Engine xử lý dữ liệu phân tán. Spark được dùng cho Bronze,
-  Silver và Gold jobs.
-* **Apache Airflow**: Điều phối pipeline bằng DAGs. Bronze và Silver chạy định
-  kỳ, Gold và Gold Metadata chạy manual khi cần build lại layer phục vụ phân
-  tích.
-* **MinIO**: Object storage local, tương thích S3. Dữ liệu được lưu theo các
-  bucket `bronze`, `silver`, `gold`.
-* **Apache Iceberg**: Table format cho Gold layer, giúp dữ liệu Gold có schema,
-  metadata và có thể query bằng Trino.
-* **PostgreSQL**: Lưu Iceberg JDBC catalog metadata, Airflow metadata và dữ
-  liệu ứng dụng như users, sessions, query history.
-* **Trino**: Distributed SQL query engine, dùng để truy vấn các bảng Iceberg
-  trong Gold layer.
+* **Apache Kafka** nhận dòng sự kiện e-commerce từ CSV producer. Project dùng
+  Kafka KRaft nên không cần Zookeeper.
+* **Apache Spark** xử lý dữ liệu qua các job Bronze, Silver và Gold.
+* **Apache Airflow** điều phối pipeline bằng DAGs. Bronze/Silver chạy theo
+  lịch, còn Gold/Gold Metadata được trigger khi cần refresh lớp phân tích.
+* **MinIO** đóng vai trò data lake local tương thích S3, với các bucket
+  `bronze`, `silver`, `gold`.
+* **Apache Iceberg** quản lý các bảng Gold để dữ liệu có schema, metadata và có
+  thể query ổn định qua Trino.
+* **PostgreSQL** lưu Iceberg JDBC catalog, metadata của Airflow và dữ liệu ứng
+  dụng như users, sessions, query history.
+* **Trino** là SQL engine dùng để truy vấn trực tiếp Gold layer.
 
 ### Backend, Frontend & AI
 
-* **FastAPI**: Backend API cho Analytics Console, authentication, catalog,
+* **FastAPI** là backend chính cho Analytics Console: authentication, catalog,
   history, settings, pipeline control và Agent execution.
-* **LangGraph**: Xây dựng luồng AI Agent gồm guard question, load metadata,
-  generate SQL, validate SQL, execute SQL, validate result, plan chart và tạo
-  insight.
-* **Gemini / Groq**: LLM providers cho Text-to-SQL và diễn giải kết quả. Backend
-  hỗ trợ chọn provider/model trong settings.
-* **Next.js + React + TailwindCSS**: Frontend application cho người dùng cuối.
-* **Recharts**: Hiển thị biểu đồ trong dashboard và kết quả Agent.
+* **LangGraph** định nghĩa luồng AI Agent từ kiểm tra câu hỏi, đọc metadata,
+  sinh SQL, validate SQL, chạy Trino, kiểm tra kết quả đến tạo insight.
+* **Gemini / Groq** là LLM providers cho Text-to-SQL và phần diễn giải kết quả.
+  Người dùng có thể chọn provider/model trong Settings.
+* **Next.js + React + TailwindCSS** xây dựng giao diện web.
+* **Recharts** hiển thị biểu đồ trong dashboard và kết quả trả về từ Agent.
 
 ### Monitoring
 
-* **Prometheus**: Thu thập metrics HTTP, AI Agent, ETL pipeline, Trino,
+* **Prometheus** thu thập metrics của backend, Agent, ETL pipeline, Trino,
   PostgreSQL, host và container.
-* **Grafana**: Trực quan hóa metrics bằng các dashboard đã provision sẵn.
-* **node-exporter, cAdvisor, postgres-exporter**: Export metrics hệ thống,
+* **Grafana** trực quan hóa các metrics đó bằng dashboard đã provision sẵn.
+* **node-exporter, cAdvisor, postgres-exporter** cung cấp metrics cho host,
   container và PostgreSQL.
 
 ## 4. Chức năng chính của hệ thống
 
 ### 4.1. Data Pipeline
 
-Pipeline dữ liệu đi qua ba tầng:
+Pipeline dữ liệu được tổ chức theo ba tầng để tách rõ dữ liệu thô, dữ liệu đã
+làm sạch và dữ liệu phục vụ phân tích.
 
 **Bronze**
 
-- Đọc message mới từ Kafka topic `ecommerce_events`.
-- Parse JSON theo schema e-commerce.
-- Thêm Kafka metadata như partition, offset và timestamp.
-- Ghi Parquet vào `s3a://bronze/ecommerce_events/`.
-- Lưu offset trên MinIO để lần chạy sau không đọc lại dữ liệu cũ.
+Bronze là điểm vào của dữ liệu. Spark đọc message mới từ Kafka topic
+`ecommerce_events`, parse JSON theo schema e-commerce, thêm metadata của Kafka
+như partition, offset, timestamp rồi ghi Parquet vào:
+
+```text
+s3a://bronze/ecommerce_events/
+```
+
+Offset được lưu lại trên MinIO để lần chạy tiếp theo chỉ đọc phần dữ liệu mới.
 
 **Silver**
 
-- Đọc dữ liệu Bronze.
-- Chuẩn hóa kiểu dữ liệu timestamp, số, decimal.
-- Tách category hierarchy thành `category_l1`, `category_l2`, `category_l3`.
-- Validate bản ghi và tách valid/invalid outputs.
-- Deduplicate bằng `event_fingerprint`.
-- Ghi dữ liệu sạch vào `s3a://silver/ecommerce_events/`.
+Silver là nơi dữ liệu được chuẩn hóa. Job Silver cast lại timestamp, số,
+decimal, chuẩn hóa brand/category/session, tách category hierarchy thành
+`category_l1`, `category_l2`, `category_l3`, sau đó validate và tách dữ liệu
+hợp lệ/không hợp lệ. Các event hợp lệ được deduplicate bằng
+`event_fingerprint` trước khi ghi vào:
+
+```text
+s3a://silver/ecommerce_events/
+```
 
 **Gold**
 
-- Đọc Silver clean events.
-- Build staging, fact tables, dimension tables và summary tables.
-- Ghi Gold tables bằng Apache Iceberg.
-- Các bảng chính gồm:
-  - `iceberg.gold.fact_events`
-  - `iceberg.gold.fact_sales`
-  - `iceberg.gold.dim_time`
-  - `iceberg.gold.dim_product`
-  - `iceberg.gold.dim_user`
-  - `iceberg.gold.dim_session`
-  - `iceberg.gold.daily_event_summary`
-  - `iceberg.gold.daily_product_summary`
-  - `iceberg.gold.daily_category_summary`
-  - `iceberg.gold.daily_brand_summary`
+Gold là lớp phục vụ phân tích. Từ Silver clean events, hệ thống build staging,
+fact tables, dimension tables và summary tables bằng Apache Iceberg. Các bảng
+Gold chính gồm:
 
-![Airflow DAGs cho Bronze, Silver, Gold và Gold Metadata](imgs/airflow-dags.png)
+- `iceberg.gold.fact_events`
+- `iceberg.gold.fact_sales`
+- `iceberg.gold.dim_time`
+- `iceberg.gold.dim_product`
+- `iceberg.gold.dim_user`
+- `iceberg.gold.dim_session`
+- `iceberg.gold.daily_event_summary`
+- `iceberg.gold.daily_product_summary`
+- `iceberg.gold.daily_category_summary`
+- `iceberg.gold.daily_brand_summary`
 
-![MinIO buckets Bronze, Silver và Gold](imgs/minio-buckets.png)
+![Airflow DAGs cho Bronze, Silver, Gold và Gold Metadata](./imgs/airflow-dags.png)
 
-![Query Gold table thành công qua Trino](imgs/trino-gold-query.png)
+![MinIO buckets Bronze, Silver và Gold](./imgs/minio-buckets.png)
+
+![Query Gold table thành công qua Trino](./imgs/trino-gold-query.png)
 
 ### 4.2. Semantic Metadata cho AI Agent
 
-Gold Metadata pipeline tạo hai bảng metadata:
+Để Agent sinh SQL tốt hơn, project có thêm một lớp semantic metadata cho Gold
+tables. Metadata này được build thành hai bảng:
 
 ```text
 iceberg.metadata.semantic_table_catalog
 iceberg.metadata.semantic_column_catalog
 ```
 
-Hai bảng này mô tả ý nghĩa business của từng bảng và từng cột trong Gold layer,
-ví dụ: bảng dùng để trả lời loại câu hỏi nào, grain của bảng là gì, cột nào đại
-diện cho doanh thu, lượt xem, conversion rate, brand, product hoặc category.
+Hai bảng này mô tả ý nghĩa business của từng bảng và từng cột: bảng nên dùng
+cho loại câu hỏi nào, grain của bảng là gì, cột nào đại diện cho doanh thu,
+lượt xem, conversion rate, brand, product hoặc category.
 
-AI Agent dùng metadata này để hiểu ý nghĩa business của dữ liệu trước khi sinh
-SQL. Bộ metadata chuẩn được khai báo trong:
+Khi nhận câu hỏi tự nhiên, Agent đọc metadata này trước để chọn bảng/cột phù
+hợp, rồi mới sinh SQL. Bộ metadata chuẩn được khai báo trong:
 
 ```text
 code/spark/gold/metadata_definitions.py
@@ -180,7 +217,8 @@ code/spark/gold/metadata_definitions.py
 
 ### 4.3. AI Analytics Agent
 
-Người dùng có thể đặt câu hỏi như:
+Với lớp Agent, người dùng không cần viết SQL trực tiếp. Họ có thể hỏi các câu
+gần với ngôn ngữ phân tích kinh doanh, ví dụ:
 
 ```text
 Top 10 brand theo doanh thu trong tháng gần nhất
@@ -189,7 +227,7 @@ Danh mục nào có tỷ lệ chuyển đổi cao nhất?
 Sản phẩm nào được xem nhiều nhất?
 ```
 
-Luồng xử lý của Agent:
+Luồng xử lý bên trong Agent:
 
 ```text
 guard_question
@@ -207,7 +245,7 @@ guard_question
   -> build_final_response
 ```
 
-Các cơ chế an toàn chính:
+Để tránh sinh truy vấn nguy hiểm hoặc sai ngữ cảnh, Agent có một số guardrail:
 
 - Chặn câu hỏi có ý định xóa, sửa, ghi dữ liệu hoặc prompt injection cơ bản.
 - Chỉ cho phép SQL dạng `SELECT` hoặc `WITH ... SELECT`.
@@ -219,7 +257,8 @@ Các cơ chế an toàn chính:
 
 ### 4.4. Analytics Console
 
-Frontend cung cấp các màn hình:
+Frontend là nơi gom toàn bộ trải nghiệm sử dụng của project. Các màn hình chính
+bao gồm:
 
 - **Ask**: Chat với AI Agent, xem SQL, bảng dữ liệu, biểu đồ và insight.
 - **Dashboard**: KPI tổng quan, doanh thu theo ngày, ranking brand/category/
@@ -232,13 +271,13 @@ Frontend cung cấp các màn hình:
 - **Settings**: Chọn theme, provider/model, chart mặc định, ngôn ngữ và xem
   trạng thái cấu hình hệ thống.
 
-![Dashboard KPI và ranking](imgs/ui-dashboard.png)
+![Dashboard KPI và ranking](./imgs/ui-dashboard.png)
 
-![Ask page với câu hỏi, SQL, chart và table](imgs/ui-ask.png)
+![Ask page với câu hỏi, SQL, chart và table](./imgs/ui-ask.png)
 
-![Catalog semantic metadata](imgs/ui-catalog.png)
+![Catalog semantic metadata](./imgs/ui-catalog.png)
 
-![Pipelines page](imgs/ui-pipelines.png)
+![Pipelines page](./imgs/ui-pipelines.png)
 
 ## 5. Yêu cầu hệ thống
 
@@ -304,7 +343,8 @@ agent4da/
    - `envs/app.env`
    - `envs/gemini.env` hoặc `envs/groq.env` cho LLM provider của AI Agent.
 
-   Thay các giá trị `change_me` bằng giá trị phù hợp trên máy chạy.
+   Không hardcode secret vào source code hoặc README. Với môi trường local, thay các
+   giá trị `change_me` bằng giá trị phù hợp trên máy chạy.
 
 2. **Chuẩn bị JARs cho Spark**
 
@@ -367,16 +407,26 @@ agent4da/
 
 ### 7.3. Nạp dữ liệu vào Kafka
 
-Sau khi Kafka đã chạy, gửi sample CSV vào topic `ecommerce_events`:
+Sau khi Kafka và Airflow container đã chạy, đưa file CSV trong thư mục `data/`
+vào Kafka bằng script có sẵn:
 
 ```bash
-python code/kafka/producer.py \
-  --file data/event_test_1000.csv \
-  --broker localhost:9092 \
-  --topic ecommerce_events
+script/kafka/producer.sh <ten_file_csv>
 ```
 
-Producer đọc từng dòng CSV, chuyển thành JSON và gửi vào Kafka.
+Ví dụ:
+
+```bash
+script/kafka/producer.sh event_jan.csv
+script/kafka/producer.sh event_feb.csv
+script/kafka/producer.sh event_mar.csv
+script/kafka/producer.sh event_apr.csv
+```
+
+Script này sẽ chạy producer bên trong container Airflow, đọc file tại
+`/opt/project/data/<ten_file_csv>` và gửi từng dòng CSV dưới dạng JSON vào Kafka
+topic `ecommerce_events`. Mặc định broker là `kafka-kraft:29092`; có thể override
+bằng biến môi trường `KAFKA_BROKER` hoặc `KAFKA_TOPIC` nếu cần.
 
 ### 7.4. Chạy pipeline dữ liệu
 
@@ -404,7 +454,7 @@ docker exec airflow airflow dags trigger gold_metadata_pipeline
 
 Thứ tự chạy end-to-end:
 
-1. Gửi CSV vào Kafka.
+1. Gửi CSV vào Kafka bằng `script/kafka/producer.sh <ten_file_csv>`.
 2. Trigger `bronze_pipeline`.
 3. Trigger `silver_pipeline`.
 4. Trigger `gold_pipeline`.
@@ -475,9 +525,9 @@ Backend expose Prometheus metrics tại:
 http://localhost:8083/metrics
 ```
 
-![Prometheus targets và metrics](imgs/prometheus.png)
+![Prometheus targets và metrics](./imgs/prometheus.png)
 
-![Grafana dashboard AI Agent Performance](imgs/grafana-agent-performance.png)
+![Grafana dashboard AI Agent Performance](./imgs/grafana-agent-performance.png)
 
 ## 8. Các URLs quan trọng
 
@@ -571,3 +621,7 @@ Các tài liệu sâu hơn nằm trong thư mục `docs/`:
   `envs/gemini.env` hoặc `envs/groq.env`.
 - Frontend gọi backend qua `NEXT_PUBLIC_API_BASE_URL`; backend kiểm soát CORS
   bằng `APP_CORS_ORIGINS`.
+
+---
+
+*Tài liệu này được cập nhật lần cuối vào: 11/06/2026.*
