@@ -20,14 +20,13 @@ services:
       - ./envs/spark.env
     volumes:
       - ./code/spark:/opt/spark/work:ro
-      # Jars mount tại path riêng — không đè /opt/spark/jars gốc của image
       - ./jars:/opt/project/jars:ro
     networks:
       - data_network
 
-  spark-worker:
+  spark-worker-1:
     image: spark:4.1.1-scala2.13-java17-python3-ubuntu
-    container_name: spark-worker
+    container_name: spark-worker-1
     user: root
     restart: unless-stopped
     command: >
@@ -37,17 +36,43 @@ services:
       - spark-master
     environment:
       SPARK_WORKER_CORES: "2"
-      SPARK_WORKER_MEMORY: "2g"
+      SPARK_WORKER_MEMORY: "4g"
       IVY_HOME: /root/.ivy2
       SPARK_NO_DAEMONIZE: "true"
       SPARK_WORKER_DIR: /opt/spark/worker-logs
+      SPARK_WORKER_WEBUI_PORT: "8081"
     env_file:
       - ./envs/spark.env
     volumes:
       - ./code/spark:/opt/spark/work:ro
-      # Worker cũng cần đúng path này để executor load được jars
       - ./jars:/opt/project/jars:ro
-      - ./log/spark:/opt/spark/worker-logs
+      - ./log/spark/worker-1:/opt/spark/worker-logs
+    networks:
+      - data_network
+
+  spark-worker-2:
+    image: spark:4.1.1-scala2.13-java17-python3-ubuntu
+    container_name: spark-worker-2
+    user: root
+    restart: unless-stopped
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077
+    depends_on:
+      - spark-master
+    environment:
+      SPARK_WORKER_CORES: "2"
+      SPARK_WORKER_MEMORY: "4g"
+      IVY_HOME: /root/.ivy2
+      SPARK_NO_DAEMONIZE: "true"
+      SPARK_WORKER_DIR: /opt/spark/worker-logs
+      SPARK_WORKER_WEBUI_PORT: "8081"
+    env_file:
+      - ./envs/spark.env
+    volumes:
+      - ./code/spark:/opt/spark/work:ro
+      - ./jars:/opt/project/jars:ro
+      - ./log/spark/worker-2:/opt/spark/worker-logs
     networks:
       - data_network
 
